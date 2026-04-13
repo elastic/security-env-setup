@@ -44,6 +44,8 @@ async function login(): Promise<void> {
       name: 'apiKey',
       message: `Enter API key for ${environment}:`,
       mask: '*',
+      filter: (input: string) => input.trim(),
+      validate: (input: string) => input.trim().length > 0 || 'API key cannot be empty.',
     },
   ]);
 
