@@ -36,6 +36,48 @@ function tryChmodSync(targetPath: string, mode: number): void {
   }
 }
 
+function replaceFileSync(sourcePath: string, destinationPath: string): void {
+  try {
+    fs.renameSync(sourcePath, destinationPath);
+    return;
+  } catch (error) {
+    const renameError = error as NodeJS.ErrnoException;
+    const destinationExists =
+      renameError.code === 'EEXIST' ||
+      renameError.code === 'EPERM' ||
+      renameError.code === 'EACCES';
+
+    if (process.platform !== 'win32' || !destinationExists || !fs.existsSync(destinationPath)) {
+      throw error;
+    }
+  }
+
+  try {
+    fs.unlinkSync(destinationPath);
+  } catch (error) {
+    const unlinkError = error as NodeJS.ErrnoException;
+    if (unlinkError.code !== 'ENOENT') {
+      throw new Error(
+        `Failed to replace existing config file at ${destinationPath} on Windows: ${unlinkError.message}`,
+      );
+    }
+  }
+
+  try {
+    fs.renameSync(sourcePath, destinationPath);
+  } catch (error) {
+    const renameError = error as NodeJS.ErrnoException;
+    try {
+      fs.copyFileSync(sourcePath, destinationPath);
+      fs.unlinkSync(sourcePath);
+    } catch {
+      throw new Error(
+        `Failed to replace config file at ${destinationPath} on Windows after rename fallback: ${renameError.message}`,
+      );
+    }
+  }
+}
+
 const CONFIG_DIR = path.join(os.homedir(), '.security-env-setup');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
@@ -73,7 +115,7 @@ function writeStore(data: StoreData): void {
   try {
     fs.writeFileSync(tempFile, serialized, { mode: 0o600 });
     tryChmodSync(tempFile, 0o600);
-    fs.renameSync(tempFile, CONFIG_FILE);
+    replaceFileSync(tempFile, CONFIG_FILE);
     renamed = true;
 
     // Explicitly enforce owner-only permissions even if the destination already existed.
