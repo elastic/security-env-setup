@@ -67,7 +67,7 @@ async function login(): Promise<void> {
     } else {
       logger.error(getErrorMessage(err));
     }
-    process.exit(1);
+    throw err instanceof Error ? err : new Error(getErrorMessage(err));
   }
 }
 
