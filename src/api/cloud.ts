@@ -2,18 +2,11 @@ import axios from 'axios';
 import ora from 'ora';
 import type { DeploymentConfig, DeploymentResult, ElasticCredentials, Environment } from '../types';
 import { getApiKey } from '../config/store';
+import { API_ENDPOINTS } from '../config/endpoints';
 import { retry } from '../utils/retry';
 import logger from '../utils/logger';
-
-// ---------------------------------------------------------------------------
-// Endpoints
-// ---------------------------------------------------------------------------
-
-const API_ENDPOINTS: Record<Environment, string> = {
-  prod: 'https://api.elastic-cloud.com',
-  staging: 'https://api.staging.foundit.no',
-  qa: 'https://api.qa.cld.elstc.co',
-};
+import { buildHeaders } from '../utils/http';
+import { getErrorMessage } from '../utils/errors';
 
 // ---------------------------------------------------------------------------
 // Internal API response types — never exported
@@ -30,12 +23,8 @@ interface ResourceInfo {
   metadata?: ResourceMetadata;
 }
 
-interface ApiEsResource {
-  ref_id?: string;
-  info?: ResourceInfo;
-}
-
-interface ApiKibanaResource {
+/** Shared shape for both ES and Kibana resource entries in the API response. */
+interface ApiResource {
   ref_id?: string;
   info?: ResourceInfo;
 }
@@ -45,8 +34,8 @@ interface DeploymentGetResponse {
   id: string;
   name?: string;
   resources?: {
-    elasticsearch?: ApiEsResource[];
-    kibana?: ApiKibanaResource[];
+    elasticsearch?: ApiResource[];
+    kibana?: ApiResource[];
   };
 }
 
@@ -129,13 +118,6 @@ function requireApiKey(env: Environment): string {
   return apiKey;
 }
 
-function buildHeaders(apiKey: string): Record<string, string> {
-  return {
-    Authorization: `ApiKey ${apiKey}`,
-    'Content-Type': 'application/json',
-  };
-}
-
 /**
  * Translates an axios error (or any unknown error) into a human-readable
  * Error. Always throws — typed as `never` so callers can be used in
@@ -159,14 +141,11 @@ function handleApiError(err: unknown, context: string): never {
         );
     }
   }
-  throw new Error(`${context}: ${err instanceof Error ? err.message : 'Unexpected error'}`);
+  throw new Error(`${context}: ${getErrorMessage(err)}`);
 }
 
-function buildEsUrl(endpoint: string): string {
-  return `https://${endpoint}:9243`;
-}
-
-function buildKibanaUrl(endpoint: string): string {
+/** Builds an HTTPS URL for an Elastic cluster endpoint (ES and Kibana both use port 9243 on Cloud). */
+function buildEndpointUrl(endpoint: string): string {
   return `https://${endpoint}:9243`;
 }
 
@@ -180,21 +159,34 @@ function allResourcesStarted(data: DeploymentGetResponse): boolean {
   );
 }
 
-function extractResultFromGet(data: DeploymentGetResponse): DeploymentResult {
+/**
+ * Maps a raw API deployment response to a `DeploymentResult`.
+ *
+ * @param knownStatus - Pass when the caller has already established the status
+ *   (e.g., the polling loop that throws until all resources are started) to
+ *   avoid a redundant traversal of the resource arrays.
+ */
+function extractResultFromGet(
+  data: DeploymentGetResponse,
+  knownStatus?: DeploymentResult['status'],
+): DeploymentResult {
   const esEndpoint = data.resources?.elasticsearch?.[0]?.info?.metadata?.endpoint ?? '';
   const kbEndpoint = data.resources?.kibana?.[0]?.info?.metadata?.endpoint ?? '';
 
+  const esUrl = esEndpoint ? buildEndpointUrl(esEndpoint) : '';
+  const kibanaUrl = kbEndpoint ? buildEndpointUrl(kbEndpoint) : '';
+
   const credentials: ElasticCredentials = {
-    url: esEndpoint ? buildEsUrl(esEndpoint) : '',
+    url: esUrl,
     username: 'elastic',
     password: '',
   };
 
   return {
     id: data.id,
-    status: allResourcesStarted(data) ? 'running' : 'creating',
-    esUrl: esEndpoint ? buildEsUrl(esEndpoint) : '',
-    kibanaUrl: kbEndpoint ? buildKibanaUrl(kbEndpoint) : '',
+    status: knownStatus ?? (allResourcesStarted(data) ? 'running' : 'creating'),
+    esUrl,
+    kibanaUrl,
     credentials,
   };
 }
@@ -264,6 +256,7 @@ export async function createDeployment(
 
   const creds = response.data.resources?.elasticsearch?.[0]?.credentials;
 
+  // URLs are not available at creation time; call waitForDeployment to populate them.
   const credentials: ElasticCredentials = {
     url: '',
     username: creds?.username ?? 'elastic',
@@ -311,14 +304,15 @@ export async function waitForDeployment(
           throw new Error('Deployment resources not yet started');
         }
 
-        return extractResultFromGet(response.data);
+        // Pass knownStatus to skip the redundant allResourcesStarted traversal.
+        return extractResultFromGet(response.data, 'running');
       },
       { maxAttempts: MAX_ATTEMPTS, delayMs: POLL_INTERVAL_MS, backoff: false },
     );
 
     spinner.succeed('Deployment is healthy and running.');
-    logger.step(2, 3, `Kibana: ${result.kibanaUrl}`);
-    logger.step(3, 3, `Elasticsearch: ${result.esUrl}`);
+    logger.info(`Kibana:        ${result.kibanaUrl}`);
+    logger.info(`Elasticsearch: ${result.esUrl}`);
 
     return result;
   } catch (err) {

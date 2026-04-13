@@ -127,6 +127,10 @@ function writeStore(data: StoreData): void {
   }
 }
 
+export function getAllApiKeys(): Partial<Record<Environment, string>> {
+  return readStore().apiKeys;
+}
+
 export function getApiKey(env: Environment): string | undefined {
   return readStore().apiKeys[env];
 }
@@ -146,11 +150,18 @@ export function hasApiKey(env: Environment): boolean {
   return typeof apiKey === 'string' && apiKey.trim().length > 0;
 }
 
-export function clearApiKey(env: Environment): void {
+/**
+ * Removes the API key for the given environment.
+ * Returns `true` if a key was present and deleted, `false` if nothing was stored.
+ */
+export function clearApiKey(env: Environment): boolean {
   const store = readStore();
+  if (store.apiKeys[env] === undefined) return false;
+
   const apiKeys = Object.fromEntries(
     Object.entries(store.apiKeys).filter(([key]) => key !== env),
   ) as Partial<Record<Environment, string>>;
 
   writeStore({ ...store, apiKeys });
+  return true;
 }

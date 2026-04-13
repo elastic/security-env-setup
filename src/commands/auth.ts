@@ -4,16 +4,13 @@ import axios from 'axios';
 import ora from 'ora';
 import chalk from 'chalk';
 import type { Environment } from '../types';
-import { clearApiKey, hasApiKey, setApiKey } from '../config/store';
+import { clearApiKey, setApiKey, getAllApiKeys } from '../config/store';
+import { API_ENDPOINTS } from '../config/endpoints';
+import { buildHeaders } from '../utils/http';
+import { getErrorMessage } from '../utils/errors';
 import logger from '../utils/logger';
 
-const ENDPOINTS: Record<Environment, string> = {
-  prod: 'https://api.elastic-cloud.com',
-  staging: 'https://api.staging.foundit.no',
-  qa: 'https://api.qa.cld.elstc.co',
-};
-
-const API_KEY_VALIDATION_TIMEOUT_MS = 10000;
+const API_KEY_VALIDATION_TIMEOUT_MS = 10_000;
 
 const ENVIRONMENTS: Environment[] = ['prod', 'qa', 'staging'];
 
@@ -23,11 +20,6 @@ interface EnvAnswer extends inquirer.Answers {
 
 interface ApiKeyAnswer extends inquirer.Answers {
   apiKey: string;
-}
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return 'Unknown error';
 }
 
 async function login(): Promise<void> {
@@ -47,19 +39,20 @@ async function login(): Promise<void> {
       message: `Enter API key for ${environment}:`,
       mask: '*',
       filter: (input: string): string => input.trim(),
-      validate: (input: string): boolean | string => input.trim().length > 0 || 'API key cannot be empty.',
+      validate: (input: string): boolean | string =>
+        input.trim().length > 0 || 'API key cannot be empty.',
     },
   ]);
 
   const spinner = ora('Validating API key…').start();
 
   try {
-    await axios.get<unknown>(`${ENDPOINTS[environment]}/api/v1/deployments`, {
-      headers: { Authorization: `ApiKey ${apiKey}` },
+    await axios.get<unknown>(`${API_ENDPOINTS[environment]}/api/v1/deployments`, {
+      headers: buildHeaders(apiKey),
       timeout: API_KEY_VALIDATION_TIMEOUT_MS,
     });
   } catch (err) {
-    spinner.fail(chalk.red('Authentication failed.'));
+    spinner.fail('Authentication failed.');
     if (axios.isAxiosError(err)) {
       const status = err.response?.status;
       throw new Error(
@@ -73,24 +66,28 @@ async function login(): Promise<void> {
 
   try {
     setApiKey(environment, apiKey);
-    spinner.succeed(chalk.green(`Authenticated to ${environment} — credentials saved.`));
+    spinner.succeed(`Authenticated to ${environment} — credentials saved.`);
   } catch (err) {
-    spinner.fail(chalk.red('Authentication succeeded, but saving credentials failed.'));
+    spinner.fail('Authentication succeeded, but saving credentials failed.');
     throw new Error(`Failed to save API key: ${getErrorMessage(err)}`);
   }
 }
 
 function status(): void {
-  // eslint-disable-next-line no-console
-  console.log('');
+  // Read config once; avoids N separate fs.readFileSync calls in the loop.
+  const stored = getAllApiKeys();
+
+  logger.print('');
   for (const env of ENVIRONMENTS) {
+    const val = stored[env];
+    const isConfigured = typeof val === 'string' && val.trim().length > 0;
     const label = chalk.bold(env.padEnd(10));
-    const indicator = hasApiKey(env) ? chalk.green('✓ configured') : chalk.red('✗ not configured');
-    // eslint-disable-next-line no-console
-    console.log(`  ${label} ${indicator}`);
+    const indicator = isConfigured
+      ? chalk.green('✓ configured')
+      : chalk.red('✗ not configured');
+    logger.print(`  ${label} ${indicator}`);
   }
-  // eslint-disable-next-line no-console
-  console.log('');
+  logger.print('');
 }
 
 async function logout(): Promise<void> {
@@ -103,12 +100,13 @@ async function logout(): Promise<void> {
     },
   ]);
 
-  if (!hasApiKey(environment)) {
+  // clearApiKey returns false when no key was stored — avoids a separate hasApiKey read.
+  const removed = clearApiKey(environment);
+  if (!removed) {
     logger.warn(`No API key configured for ${environment}.`);
     return;
   }
 
-  clearApiKey(environment);
   logger.success(`Cleared API key for ${environment}.`);
 }
 
