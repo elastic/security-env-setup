@@ -24,6 +24,18 @@ function isStoreData(value: unknown): value is StoreData {
   return Object.values(value.apiKeys).every((apiKey) => typeof apiKey === 'string');
 }
 
+function tryChmodSync(targetPath: string, mode: number): void {
+  try {
+    fs.chmodSync(targetPath, mode);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EPERM' || code === 'EINVAL' || code === 'ENOSYS') {
+      return;
+    }
+    throw error;
+  }
+}
+
 const CONFIG_DIR = path.join(os.homedir(), '.security-env-setup');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
@@ -42,11 +54,11 @@ function readStore(): StoreData {
 function writeStore(data: StoreData): void {
   // Ensure the config directory exists and is not accessible to other users.
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(CONFIG_DIR, 0o700);
+  tryChmodSync(CONFIG_DIR, 0o700);
 
   // Write the file, then explicitly enforce owner-only permissions even if it already existed.
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
-  fs.chmodSync(CONFIG_FILE, 0o600);
+  tryChmodSync(CONFIG_FILE, 0o600);
 }
 
 export function getApiKey(env: Environment): string | undefined {
