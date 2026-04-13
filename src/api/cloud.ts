@@ -108,6 +108,11 @@ interface CreateDeploymentPayload {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Timeout for one-off operations (create/list/delete). */
+const REQUEST_TIMEOUT_MS = 30_000;
+/** Timeout for individual poll requests — must be well below POLL_INTERVAL_MS. */
+const POLL_REQUEST_TIMEOUT_MS = 10_000;
+
 function requireApiKey(env: Environment): string {
   const apiKey = getApiKey(env);
   if (apiKey === undefined || apiKey.trim().length === 0) {
@@ -135,10 +140,14 @@ function handleApiError(err: unknown, context: string): never {
         throw new Error(`${context}: Resource not found (HTTP 404).`);
       case 429:
         throw new Error(`${context}: API rate limit exceeded — please wait before retrying.`);
-      default:
+      default: {
+        // Include the underlying axios message (e.g. "Network Error", "timeout of Xms exceeded",
+        // or a server-side error summary) to aid debugging network and unexpected HTTP failures.
+        const detail = err.message ? ` — ${err.message}` : '';
         throw new Error(
-          `${context}: API request failed${status !== undefined ? ` with HTTP ${String(status)}` : ''}.`,
+          `${context}: API request failed${status !== undefined ? ` with HTTP ${String(status)}` : ''}${detail}.`,
         );
+      }
     }
   }
   throw new Error(`${context}: ${getErrorMessage(err)}`);
@@ -251,7 +260,7 @@ export async function createDeployment(
     .post<CreateDeploymentApiResponse>(
       `${API_ENDPOINTS[env]}/api/v1/deployments`,
       payload,
-      { headers: buildHeaders(apiKey) },
+      { headers: buildHeaders(apiKey), timeout: REQUEST_TIMEOUT_MS },
     )
     .catch((err: unknown) => handleApiError(err, 'createDeployment'));
 
@@ -298,7 +307,10 @@ export async function waitForDeployment(
         attempt += 1;
         spinner.text = `Waiting for deployment… (attempt ${attempt}/${MAX_ATTEMPTS})`;
 
-        const response = await axios.get<DeploymentGetResponse>(url, { headers });
+        const response = await axios.get<DeploymentGetResponse>(url, {
+          headers,
+          timeout: POLL_REQUEST_TIMEOUT_MS,
+        });
 
         if (!allResourcesStarted(response.data)) {
           throw new Error('Deployment resources not yet started');
@@ -341,11 +353,13 @@ export async function waitForDeployment(
 
     return result;
   } catch (err) {
-    spinner.fail('Deployment did not become healthy within the timeout window.');
     if (axios.isAxiosError(err)) {
+      spinner.fail('Deployment polling failed due to an API error.');
+      // handleApiError always throws — typed as never.
       handleApiError(err, 'waitForDeployment');
     }
-    throw err instanceof Error ? err : new Error('Deployment polling failed unexpectedly');
+    spinner.fail('Deployment did not become healthy within the timeout window.');
+    throw new Error('Deployment did not become healthy within the timeout window.');
   }
 }
 
@@ -355,7 +369,7 @@ export async function listDeployments(env: Environment): Promise<DeploymentResul
   const response = await axios
     .get<ListDeploymentsApiResponse>(
       `${API_ENDPOINTS[env]}/api/v1/deployments`,
-      { headers: buildHeaders(apiKey) },
+      { headers: buildHeaders(apiKey), timeout: REQUEST_TIMEOUT_MS },
     )
     .catch((err: unknown) => handleApiError(err, 'listDeployments'));
 
@@ -369,7 +383,7 @@ export async function deleteDeployment(deploymentId: string, env: Environment): 
     .post<unknown>(
       `${API_ENDPOINTS[env]}/api/v1/deployments/${deploymentId}/_shutdown`,
       {},
-      { headers: buildHeaders(apiKey) },
+      { headers: buildHeaders(apiKey), timeout: REQUEST_TIMEOUT_MS },
     )
     .catch((err: unknown) => handleApiError(err, 'deleteDeployment'));
 
