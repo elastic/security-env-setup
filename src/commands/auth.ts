@@ -58,8 +58,6 @@ async function login(): Promise<void> {
       headers: { Authorization: `ApiKey ${apiKey}` },
       timeout: API_KEY_VALIDATION_TIMEOUT_MS,
     });
-    setApiKey(environment, apiKey);
-    spinner.succeed(chalk.green(`Authenticated to ${environment} — credentials saved.`));
   } catch (err) {
     spinner.fail(chalk.red('Authentication failed.'));
     if (axios.isAxiosError(err)) {
@@ -71,6 +69,14 @@ async function login(): Promise<void> {
       );
     }
     throw new Error(getErrorMessage(err));
+  }
+
+  try {
+    setApiKey(environment, apiKey);
+    spinner.succeed(chalk.green(`Authenticated to ${environment} — credentials saved.`));
+  } catch (err) {
+    spinner.fail(chalk.red('Authentication succeeded, but saving credentials failed.'));
+    throw new Error(`Failed to save API key: ${getErrorMessage(err)}`);
   }
 }
 
