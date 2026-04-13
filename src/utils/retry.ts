@@ -9,6 +9,10 @@ const sleep = (ms: number): Promise<void> =>
 
 export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Promise<T> {
   const { maxAttempts, delayMs, backoff } = options;
+  if (maxAttempts < 1) {
+    throw new Error('maxAttempts must be at least 1');
+  }
+
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -23,5 +27,9 @@ export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Pro
     }
   }
 
-  throw lastError;
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error(`Retry failed with non-Error value: ${String(lastError)}`);
 }
