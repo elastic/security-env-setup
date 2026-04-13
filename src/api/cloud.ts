@@ -145,7 +145,7 @@ function handleApiError(err: unknown, context: string): never {
         // or a server-side error summary) to aid debugging network and unexpected HTTP failures.
         const detail = err.message ? ` — ${err.message}` : '';
         throw new Error(
-          `${context}: API request failed${status !== undefined ? ` with HTTP ${String(status)}` : ''}${detail}.`,
+          `${context}: API request failed${status !== undefined ? ` with HTTP ${String(status)}` : ''}${detail}`,
         );
       }
     }
