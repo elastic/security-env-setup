@@ -9,8 +9,11 @@ const sleep = (ms: number): Promise<void> =>
 
 export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Promise<T> {
   const { maxAttempts, delayMs, backoff } = options;
-  if (maxAttempts < 1) {
-    throw new Error('maxAttempts must be at least 1');
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error('maxAttempts must be an integer greater than or equal to 1');
+  }
+  if (!Number.isFinite(delayMs) || delayMs < 0) {
+    throw new Error('delayMs must be a finite number greater than or equal to 0');
   }
 
   let lastError: unknown;
