@@ -61,9 +61,28 @@ function writeStore(data: StoreData): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   tryChmodSync(CONFIG_DIR, 0o700);
 
-  // Write the file, then explicitly enforce owner-only permissions even if it already existed.
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
-  tryChmodSync(CONFIG_FILE, 0o600);
+  // Write to a temporary file in the same directory and atomically replace the
+  // destination to avoid leaving a truncated/corrupt config if interrupted.
+  const serialized = JSON.stringify(data, null, 2);
+  const tempFile = path.join(
+    CONFIG_DIR,
+    `config.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
+  let renamed = false;
+
+  try {
+    fs.writeFileSync(tempFile, serialized, { mode: 0o600 });
+    tryChmodSync(tempFile, 0o600);
+    fs.renameSync(tempFile, CONFIG_FILE);
+    renamed = true;
+
+    // Explicitly enforce owner-only permissions even if the destination already existed.
+    tryChmodSync(CONFIG_FILE, 0o600);
+  } finally {
+    if (!renamed && fs.existsSync(tempFile)) {
+      fs.unlinkSync(tempFile);
+    }
+  }
 }
 
 export function getApiKey(env: Environment): string | undefined {
