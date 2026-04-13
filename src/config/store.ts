@@ -40,9 +40,13 @@ function readStore(): StoreData {
 }
 
 function writeStore(data: StoreData): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  // mode 0o600: owner read/write only — never expose keys to other users
+  // Ensure the config directory exists and is not accessible to other users.
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(CONFIG_DIR, 0o700);
+
+  // Write the file, then explicitly enforce owner-only permissions even if it already existed.
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+  fs.chmodSync(CONFIG_FILE, 0o600);
 }
 
 export function getApiKey(env: Environment): string | undefined {
