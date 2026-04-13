@@ -61,13 +61,11 @@ async function login(): Promise<void> {
     spinner.fail(chalk.red('Authentication failed.'));
     if (axios.isAxiosError(err)) {
       const status = err.response?.status;
-      logger.error(
+      throw new Error(
         status !== undefined
           ? `Server responded with HTTP ${status}`
           : `No response received: ${getErrorMessage(err)}`,
       );
-    } else {
-      logger.error(getErrorMessage(err));
     }
     throw new Error(getErrorMessage(err));
   }
