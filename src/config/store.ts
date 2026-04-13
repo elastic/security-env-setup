@@ -12,14 +12,26 @@ interface StoreData {
   apiKeys: Partial<Record<Environment, string>>;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isStoreData(value: unknown): value is StoreData {
+  if (!isPlainObject(value) || !('apiKeys' in value) || !isPlainObject(value.apiKeys)) {
+    return false;
+  }
+
+  return Object.values(value.apiKeys).every((apiKey) => typeof apiKey === 'string');
+}
+
 const CONFIG_DIR = path.join(os.homedir(), '.security-env-setup');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 function readStore(): StoreData {
   try {
     const raw: unknown = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-    if (typeof raw === 'object' && raw !== null && 'apiKeys' in raw) {
-      return raw as StoreData;
+    if (isStoreData(raw)) {
+      return raw;
     }
   } catch {
     // file missing or malformed — start fresh
