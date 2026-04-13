@@ -45,8 +45,13 @@ function readStore(): StoreData {
     if (isStoreData(raw)) {
       return raw;
     }
-  } catch {
-    // file missing or malformed — start fresh
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || error instanceof SyntaxError) {
+      // file missing or malformed JSON — start fresh
+      return { apiKeys: {} };
+    }
+    throw error;
   }
   return { apiKeys: {} };
 }
