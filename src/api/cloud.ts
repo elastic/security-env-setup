@@ -312,8 +312,8 @@ export async function waitForDeployment(
         if (existingCredentials !== undefined) {
           deploymentResult.credentials = {
             ...deploymentResult.credentials,
-            username: existingCredentials.username || deploymentResult.credentials.username,
-            password: existingCredentials.password || deploymentResult.credentials.password,
+            username: existingCredentials.username ?? deploymentResult.credentials.username,
+            password: existingCredentials.password ?? deploymentResult.credentials.password,
           };
         }
 

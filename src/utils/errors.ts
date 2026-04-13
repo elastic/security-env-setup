@@ -8,7 +8,7 @@ export function getErrorMessage(err: unknown): string {
   if (err && typeof err === 'object') {
     try {
       const serialized = JSON.stringify(err);
-      if (serialized) return serialized;
+      if (serialized && serialized !== '{}') return serialized;
     } catch {
       // Ignore serialization errors and fall back to the generic message below.
     }
