@@ -128,7 +128,7 @@ function writeStore(data: StoreData): void {
 }
 
 export function getAllApiKeys(): Partial<Record<Environment, string>> {
-  return readStore().apiKeys;
+  return { ...readStore().apiKeys };
 }
 
 export function getApiKey(env: Environment): string | undefined {

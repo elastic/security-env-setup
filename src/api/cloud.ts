@@ -110,7 +110,7 @@ interface CreateDeploymentPayload {
 
 function requireApiKey(env: Environment): string {
   const apiKey = getApiKey(env);
-  if (apiKey === undefined) {
+  if (apiKey === undefined || apiKey.trim().length === 0) {
     throw new Error(
       `No API key configured for environment: ${env}. Run: security-env-setup auth login`,
     );
@@ -200,7 +200,8 @@ export async function createDeployment(
   env: Environment,
 ): Promise<DeploymentResult> {
   const apiKey = requireApiKey(env);
-  const region = config.region.length > 0 ? config.region : 'gcp-us-central1';
+  const trimmedRegion = config.region.trim();
+  const region = trimmedRegion.length > 0 ? trimmedRegion : 'gcp-us-central1';
 
   const payload: CreateDeploymentPayload = {
     name: config.name,
@@ -279,6 +280,7 @@ export async function createDeployment(
 export async function waitForDeployment(
   deploymentId: string,
   env: Environment,
+  existingCredentials?: ElasticCredentials,
 ): Promise<DeploymentResult> {
   const apiKey = requireApiKey(env);
   const url = `${API_ENDPOINTS[env]}/api/v1/deployments/${deploymentId}`;
@@ -296,18 +298,41 @@ export async function waitForDeployment(
         attempt += 1;
         spinner.text = `Waiting for deployment… (attempt ${attempt}/${MAX_ATTEMPTS})`;
 
-        const response = await axios
-          .get<DeploymentGetResponse>(url, { headers })
-          .catch((err: unknown) => handleApiError(err, 'waitForDeployment'));
+        const response = await axios.get<DeploymentGetResponse>(url, { headers });
 
         if (!allResourcesStarted(response.data)) {
           throw new Error('Deployment resources not yet started');
         }
 
         // Pass knownStatus to skip the redundant allResourcesStarted traversal.
-        return extractResultFromGet(response.data, 'running');
+        const deploymentResult = extractResultFromGet(response.data, 'running');
+
+        // GET responses do not include the Elasticsearch password; restore it
+        // from the credentials obtained at creation time if they were provided.
+        if (existingCredentials !== undefined) {
+          deploymentResult.credentials = {
+            ...deploymentResult.credentials,
+            username: existingCredentials.username || deploymentResult.credentials.username,
+            password: existingCredentials.password || deploymentResult.credentials.password,
+          };
+        }
+
+        return deploymentResult;
       },
-      { maxAttempts: MAX_ATTEMPTS, delayMs: POLL_INTERVAL_MS, backoff: false },
+      {
+        maxAttempts: MAX_ATTEMPTS,
+        delayMs: POLL_INTERVAL_MS,
+        backoff: false,
+        shouldRetry: (err: unknown) => {
+          if (axios.isAxiosError(err)) {
+            const status = err.response?.status;
+            // Abort immediately on auth, not-found, or rate-limit errors — these
+            // are non-transient and won't resolve with more polling.
+            return status !== 401 && status !== 404 && status !== 429;
+          }
+          return true;
+        },
+      },
     );
 
     spinner.succeed('Deployment is healthy and running.');
@@ -317,6 +342,9 @@ export async function waitForDeployment(
     return result;
   } catch (err) {
     spinner.fail('Deployment did not become healthy within the timeout window.');
+    if (axios.isAxiosError(err)) {
+      handleApiError(err, 'waitForDeployment');
+    }
     throw err instanceof Error ? err : new Error('Deployment polling failed unexpectedly');
   }
 }
