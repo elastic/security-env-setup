@@ -90,13 +90,18 @@ export function getApiKey(env: Environment): string | undefined {
 }
 
 export function setApiKey(env: Environment, key: string): void {
+  if (key.trim().length === 0) {
+    throw new Error('API key must be a non-empty string.');
+  }
+
   const store = readStore();
   store.apiKeys[env] = key;
   writeStore(store);
 }
 
 export function hasApiKey(env: Environment): boolean {
-  return readStore().apiKeys[env] !== undefined;
+  const apiKey = readStore().apiKeys[env];
+  return typeof apiKey === 'string' && apiKey.trim().length > 0;
 }
 
 export function clearApiKey(env: Environment): void {
