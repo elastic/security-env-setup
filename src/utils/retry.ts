@@ -4,6 +4,8 @@ export interface RetryOptions {
   backoff: boolean;
 }
 
+const MAX_SET_TIMEOUT_MS = 2 ** 31 - 1;
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -24,7 +26,8 @@ export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Pro
     } catch (err) {
       lastError = err;
       if (attempt < maxAttempts) {
-        const wait = backoff ? delayMs * Math.pow(2, attempt - 1) : delayMs;
+        const computedWait = backoff ? delayMs * Math.pow(2, attempt - 1) : delayMs;
+        const wait = Math.min(computedWait, MAX_SET_TIMEOUT_MS);
         await sleep(wait);
       }
     }
