@@ -110,8 +110,11 @@ export const authCommand = new Command('auth').description(
 authCommand
   .command('login')
   .description('Interactively set and validate an API key for an environment')
-  .action(async (): Promise<void> => {
-    await login();
+  .action((): void => {
+    login().catch((err: unknown): void => {
+      logger.error(`Login failed: ${getErrorMessage(err)}`);
+      process.exitCode = 1;
+    });
   });
 
 authCommand
@@ -124,6 +127,9 @@ authCommand
 authCommand
   .command('logout')
   .description('Remove the stored API key for an environment')
-  .action(async (): Promise<void> => {
-    await logout();
+  .action((): void => {
+    logout().catch((err: unknown): void => {
+      logger.error(`Logout failed: ${getErrorMessage(err)}`);
+      process.exitCode = 1;
+    });
   });
