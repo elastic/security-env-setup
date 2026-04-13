@@ -101,6 +101,9 @@ export function hasApiKey(env: Environment): boolean {
 
 export function clearApiKey(env: Environment): void {
   const store = readStore();
-  delete store.apiKeys[env];
-  writeStore(store);
+  const apiKeys = Object.fromEntries(
+    Object.entries(store.apiKeys).filter(([key]) => key !== env),
+  ) as Partial<Record<Environment, string>>;
+
+  writeStore({ ...store, apiKeys });
 }
