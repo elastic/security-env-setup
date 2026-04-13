@@ -34,7 +34,9 @@ export interface DataGenerationOptions {
   generateEvents: boolean;
 }
 
+export type Environment = 'prod' | 'qa' | 'staging';
+
 export interface AppConfig {
-  apiKey: string;
-  environment: 'production' | 'staging' | 'development';
+  apiKeys: Partial<Record<Environment, string>>;
+  environment: Environment;
 }
