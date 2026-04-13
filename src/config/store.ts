@@ -101,6 +101,6 @@ export function hasApiKey(env: Environment): boolean {
 
 export function clearApiKey(env: Environment): void {
   const store = readStore();
-  store.apiKeys = { ...store.apiKeys, [env]: undefined };
+  delete store.apiKeys[env];
   writeStore(store);
 }
