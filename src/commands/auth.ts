@@ -13,6 +13,8 @@ const ENDPOINTS: Record<Environment, string> = {
   qa: 'https://api.qa.cld.elstc.co',
 };
 
+const API_KEY_VALIDATION_TIMEOUT_MS = 10000;
+
 const ENVIRONMENTS: Environment[] = ['prod', 'qa', 'staging'];
 
 interface EnvAnswer extends inquirer.Answers {
@@ -54,6 +56,7 @@ async function login(): Promise<void> {
   try {
     await axios.get<unknown>(`${ENDPOINTS[environment]}/api/v1/deployments`, {
       headers: { Authorization: `ApiKey ${apiKey}` },
+      timeout: API_KEY_VALIDATION_TIMEOUT_MS,
     });
     setApiKey(environment, apiKey);
     spinner.succeed(chalk.green(`Authenticated to ${environment} — credentials saved.`));
