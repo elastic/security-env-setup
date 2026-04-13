@@ -69,7 +69,7 @@ async function login(): Promise<void> {
     } else {
       logger.error(getErrorMessage(err));
     }
-    throw err instanceof Error ? err : new Error(getErrorMessage(err));
+    throw new Error(getErrorMessage(err));
   }
 }
 
