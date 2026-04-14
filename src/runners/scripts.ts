@@ -58,6 +58,8 @@ function buildScriptEnv(kibanaUrl: string, credentials: ElasticCredentials): Nod
  * - stdin is ignored (scripts are non-interactive).
  * - stdout/stderr are piped; the last non-empty line updates the spinner text
  *   so the user sees real-time progress without raw scrolling output.
+ * - stderr is captured in full and appended to the rejection error message so
+ *   failures are easy to debug.
  * - Resolves on exit code 0; rejects with a descriptive error otherwise.
  */
 function spawnProcess(
@@ -69,6 +71,7 @@ function spawnProcess(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const spinner = ora(spinnerLabel).start();
+    const stderrChunks: string[] = [];
 
     const child = spawn(command, args, {
       cwd,
@@ -86,7 +89,11 @@ function spawnProcess(
     };
 
     child.stdout?.on('data', updateSpinner);
-    child.stderr?.on('data', updateSpinner);
+    child.stderr?.on('data', (chunk: unknown) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      stderrChunks.push(text);
+      updateSpinner(chunk);
+    });
 
     child.on('error', (err: Error) => {
       spinner.fail(`${spinnerLabel} — failed to start`);
@@ -103,8 +110,10 @@ function spawnProcess(
         resolve();
       } else {
         const codeStr = code !== null ? String(code) : 'unknown';
+        const stderr = stderrChunks.join('').trim();
+        const detail = stderr.length > 0 ? `\nstderr:\n${stderr}` : '';
         spinner.fail(`${spinnerLabel} — exited with code ${codeStr}`);
-        reject(new Error(`Process exited with code ${codeStr}`));
+        reject(new Error(`Process exited with code ${codeStr}${detail}`));
       }
     });
   });
@@ -122,12 +131,14 @@ function spawnProcess(
  * @throws if `kibanaRepoPath` does not exist or neither plugin path is found.
  */
 export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPaths {
-  if (!fs.existsSync(kibanaRepoPath)) {
-    throw new Error(`Kibana repository not found at: ${kibanaRepoPath}`);
+  const resolvedRepoPath = path.resolve(kibanaRepoPath);
+
+  if (!fs.existsSync(resolvedRepoPath)) {
+    throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
   }
 
-  const newScriptDir = path.join(kibanaRepoPath, NEW_PLUGIN_REL);
-  const oldScriptDir = path.join(kibanaRepoPath, OLD_PLUGIN_REL);
+  const newScriptDir = path.join(resolvedRepoPath, NEW_PLUGIN_REL);
+  const oldScriptDir = path.join(resolvedRepoPath, OLD_PLUGIN_REL);
 
   let scriptDir: string;
 
@@ -137,7 +148,7 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
     scriptDir = oldScriptDir;
   } else {
     throw new Error(
-      `Could not find security_solution plugin inside "${kibanaRepoPath}".\n` +
+      `Could not find security_solution plugin inside "${resolvedRepoPath}".\n` +
         `Looked for:\n  (new) ${newScriptDir}\n  (old) ${oldScriptDir}`,
     );
   }
@@ -252,8 +263,8 @@ export async function runAllDataGeneration(
   };
 
   // Validate the repo path once — fail early before touching any scripts.
-  if (!fs.existsSync(options.kibanaRepoPath)) {
-    throw new Error(`Kibana repository not found at: ${options.kibanaRepoPath}`);
+  if (!fs.existsSync(path.resolve(options.kibanaRepoPath))) {
+    throw new Error(`Kibana repository not found at: ${path.resolve(options.kibanaRepoPath)}`);
   }
 
   if (options.generateEvents) {

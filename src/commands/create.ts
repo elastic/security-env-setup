@@ -124,7 +124,7 @@ async function runCreate(): Promise<void> {
       kibanaRepoPath,
       kibanaUrl: deployment.kibanaUrl,
       credentials,
-      spaceId: config.spaces[0]?.id,
+      spaceId: createdSpaces[0]?.id,
       generateAlerts,
       generateCases,
       generateEvents,

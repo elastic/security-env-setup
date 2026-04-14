@@ -46,7 +46,7 @@ export interface KibanaScriptPaths {
   scriptDir: string;
   /** Absolute path to scripts/data/generate_cli.js. */
   generateCli: string;
-  /** Working directory for `yarn test:generate` (same as scriptDir). */
+  /** Absolute path used as the working directory for `yarn test:generate` (same as scriptDir). */
   testGenerate: string;
 }
 
