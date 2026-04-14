@@ -52,13 +52,15 @@ export interface CreateSpaceResult {
  * exclusively in the Authorization header and never written to logs.
  */
 function buildKibanaHeaders(credentials: ElasticCredentials): Record<string, string> {
-  if (!credentials.username.trim() || !credentials.password.trim()) {
+  const username = credentials.username.trim();
+  const password = credentials.password.trim();
+  if (!username || !password) {
     throw new Error(
       'Kibana credentials are incomplete — both username and password are required.',
     );
   }
   // Credentials are encoded here and must never appear in any log or error message.
-  const token = Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64');
+  const token = Buffer.from(`${username}:${password}`).toString('base64');
   return {
     Authorization: `Basic ${token}`,
     'Content-Type': 'application/json',
