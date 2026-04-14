@@ -301,7 +301,7 @@ export async function createDeployment(
     },
   };
 
-  logger.step(1, 3, `Creating deployment "${config.name}" on ${env}…`);
+  logger.info(`Creating deployment "${config.name}" on ${env}…`);
 
   const response = await axios
     .post<CreateDeploymentApiResponse>(

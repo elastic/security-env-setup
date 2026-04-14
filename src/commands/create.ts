@@ -3,7 +3,7 @@ import path from 'path';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import type { Environment } from '../types';
-import { getApiKey } from '../config/store';
+import { hasApiKey } from '../config/store';
 import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
 import { runWizard } from '../wizard/prompts';
@@ -51,7 +51,7 @@ function printSummary(params: {
   logger.print(`  ${label('Elasticsearch')}${value(esUrl || '(pending)')}`);
   logger.print(`  ${label('Username')}${value(username)}`);
   logger.print(`  ${label('Password')}${warn(password)}`);
-  logger.print(`  ${label('Spaces')}${value(spacesLine)}`);
+  logger.print(`  ${label('Spaces')}${spaceNames.length > 0 ? value(spacesLine) : spacesLine}`);
   logger.print(line);
   logger.print(chalk.dim('  Keep your password safe — it will not be shown again.'));
   logger.print('');
@@ -113,7 +113,7 @@ async function runCreate(): Promise<void> {
 
   const { config, environment } = await runWizard();
 
-  if (getApiKey(environment) === undefined) {
+  if (!hasApiKey(environment)) {
     logger.error(
       `No API key configured for environment "${environment}". Run: security-env-setup auth login`,
     );
@@ -122,7 +122,7 @@ async function runCreate(): Promise<void> {
   }
 
   // ── Step 2/5: Create deployment ───────────────────────────────────────────
-  logger.info(`Creating deployment "${config.name}" on ${environment}…`);
+  logger.step(2, TOTAL_STEPS, `Creating deployment "${config.name}" on ${environment}…`);
 
   const initialResult = await createDeployment(config, environment);
 
