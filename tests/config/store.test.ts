@@ -8,7 +8,6 @@ const mockedFs = fs as jest.Mocked<typeof fs>;
 
 // The store builds config paths at module load time using os.homedir().
 const CONFIG_DIR = path.join(os.homedir(), '.security-env-setup');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 // Re-import store after mocking fs so the mocks apply.
 import {
@@ -215,8 +214,9 @@ describe('writeStore / tryChmodSync error handling', () => {
 
   it('falls back to unlinkSync + renameSync on Windows EEXIST from renameSync', () => {
     stubReadFile(makeStoreJson({}));
-    // Simulate platform-neutral: first renameSync throws EEXIST, then succeeds
+    const originalPlatform = process.platform;
     let renameCallCount = 0;
+
     mockedFs.renameSync.mockImplementation(() => {
       renameCallCount++;
       if (renameCallCount === 1) {
@@ -226,11 +226,36 @@ describe('writeStore / tryChmodSync error handling', () => {
       // second call succeeds
     });
     mockedFs.existsSync.mockReturnValue(true);
-    // On non-Windows platforms, the first renameSync failure propagates.
-    // On Windows it would try unlink+rename. Since we're on macOS in this
-    // test environment, the EEXIST path re-throws. Test that it does so.
-    if (process.platform !== 'win32') {
+
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
+    try {
+      expect(() => setApiKey('prod', 'key')).not.toThrow();
+      expect(mockedFs.unlinkSync).toHaveBeenCalledTimes(1);
+      expect(mockedFs.renameSync).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
+  });
+
+  it('rethrows EEXIST from renameSync on non-Windows platforms', () => {
+    stubReadFile(makeStoreJson({}));
+    const originalPlatform = process.platform;
+    const err = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+
+    mockedFs.renameSync.mockImplementation(() => {
+      throw err;
+    });
+    mockedFs.existsSync.mockReturnValue(true);
+
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+
+    try {
       expect(() => setApiKey('prod', 'key')).toThrow('EEXIST');
+      // Only one renameSync call (no Windows fallback retry)
+      expect(mockedFs.renameSync).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
     }
   });
 });

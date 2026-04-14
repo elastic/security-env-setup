@@ -241,11 +241,18 @@ describe('waitForDeployment', () => {
   });
 
   it('includes attempt count in timeout message when polling exhausts', async () => {
-    // Non-axios timeout error path
-    mockedRetry.mockRejectedValueOnce(new Error('Deployment resources not yet started'));
+    // Run the polling fn once so waitForDeployment increments its attempt counter,
+    // then simulate retry exhausting with the same error.
+    mockedRetry.mockImplementationOnce(async (fn) => {
+      await fn();
+    });
+    // Provide a response without started resources so the polling fn throws
+    mockedAxios.get.mockResolvedValueOnce({
+      data: { id: 'dep-123', resources: { elasticsearch: [], kibana: [] } },
+    });
     mockedAxios.isAxiosError.mockReturnValue(false);
     await expect(waitForDeployment('dep-123', 'prod')).rejects.toThrow(
-      'Deployment did not become healthy',
+      'Deployment did not become healthy within the timeout window after 1 attempt',
     );
   });
 

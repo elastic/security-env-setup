@@ -60,34 +60,48 @@ describe('retry', () => {
   });
 
   it('uses flat delay when backoff is false', async () => {
+    jest.useFakeTimers();
     const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
-    const fn = jest
-      .fn()
-      .mockRejectedValueOnce(new Error('f1'))
-      .mockRejectedValueOnce(new Error('f2'))
-      .mockResolvedValueOnce('ok');
-    await retry(fn, { maxAttempts: 3, delayMs: 50, backoff: false });
-    const delays = setTimeoutSpy.mock.calls
-      .filter(([, ms]) => (ms as number) === 50)
-      .map(([, ms]) => ms);
-    expect(delays).toEqual([50, 50]);
-    setTimeoutSpy.mockRestore();
+    try {
+      const fn = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('f1'))
+        .mockRejectedValueOnce(new Error('f2'))
+        .mockResolvedValueOnce('ok');
+      const retryPromise = retry(fn, { maxAttempts: 3, delayMs: 50, backoff: false });
+      await jest.runAllTimersAsync();
+      await expect(retryPromise).resolves.toBe('ok');
+      const delays = setTimeoutSpy.mock.calls
+        .filter(([, ms]) => (ms as number) === 50)
+        .map(([, ms]) => ms);
+      expect(delays).toEqual([50, 50]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      jest.useRealTimers();
+    }
   });
 
   it('uses exponentially increasing delays when backoff is true', async () => {
+    jest.useFakeTimers();
     const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
-    const fn = jest
-      .fn()
-      .mockRejectedValueOnce(new Error('f1'))
-      .mockRejectedValueOnce(new Error('f2'))
-      .mockResolvedValueOnce('ok');
-    await retry(fn, { maxAttempts: 3, delayMs: 50, backoff: true });
-    // attempt 1 fail → sleep(50 * 2^0 = 50); attempt 2 fail → sleep(50 * 2^1 = 100)
-    const delays = setTimeoutSpy.mock.calls
-      .filter(([, ms]) => (ms as number) === 50 || (ms as number) === 100)
-      .map(([, ms]) => ms);
-    expect(delays).toEqual([50, 100]);
-    setTimeoutSpy.mockRestore();
+    try {
+      const fn = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('f1'))
+        .mockRejectedValueOnce(new Error('f2'))
+        .mockResolvedValueOnce('ok');
+      const retryPromise = retry(fn, { maxAttempts: 3, delayMs: 50, backoff: true });
+      await jest.runAllTimersAsync();
+      // attempt 1 fail → sleep(50 * 2^0 = 50); attempt 2 fail → sleep(50 * 2^1 = 100)
+      await expect(retryPromise).resolves.toBe('ok');
+      const delays = setTimeoutSpy.mock.calls
+        .filter(([, ms]) => (ms as number) === 50 || (ms as number) === 100)
+        .map(([, ms]) => ms);
+      expect(delays).toEqual([50, 100]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      jest.useRealTimers();
+    }
   });
 
   it('throws when maxAttempts is less than 1', async () => {
