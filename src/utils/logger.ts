@@ -25,6 +25,12 @@ const logger = {
     // eslint-disable-next-line no-console
     console.log(chalk.cyan(`[${n}/${total}] ${msg}`));
   },
+
+  /** Output a pre-formatted string without any additional colour transformation. */
+  print: (msg: string): void => {
+    // eslint-disable-next-line no-console
+    console.log(msg);
+  },
 };
 
 export default logger;

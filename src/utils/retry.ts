@@ -2,6 +2,8 @@ export interface RetryOptions {
   maxAttempts: number;
   delayMs: number;
   backoff: boolean;
+  /** When provided, the retry loop aborts immediately if this returns `false`. */
+  shouldRetry?: (err: unknown) => boolean;
 }
 
 const MAX_SET_TIMEOUT_MS = 2 ** 31 - 1;
@@ -25,6 +27,9 @@ export async function retry<T>(fn: () => Promise<T>, options: RetryOptions): Pro
       return await fn();
     } catch (err) {
       lastError = err;
+      if (options.shouldRetry !== undefined && !options.shouldRetry(err)) {
+        throw err;
+      }
       if (attempt < maxAttempts) {
         const computedWait = backoff ? delayMs * Math.pow(2, attempt - 1) : delayMs;
         const wait = Math.min(computedWait, MAX_SET_TIMEOUT_MS);
