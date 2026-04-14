@@ -263,8 +263,9 @@ export async function runAllDataGeneration(
   };
 
   // Validate the repo path once — fail early before touching any scripts.
-  if (!fs.existsSync(path.resolve(options.kibanaRepoPath))) {
-    throw new Error(`Kibana repository not found at: ${path.resolve(options.kibanaRepoPath)}`);
+  const resolvedRepoPath = path.resolve(options.kibanaRepoPath);
+  if (!fs.existsSync(resolvedRepoPath)) {
+    throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
   }
 
   if (options.generateEvents) {
