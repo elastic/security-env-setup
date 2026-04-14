@@ -75,7 +75,7 @@ function handleKibanaError(err: unknown, context: string, kibanaUrl: string): ne
         throw new Error(`${context}: Invalid credentials for Kibana at ${kibanaUrl}.`);
       case 404:
         throw new Error(
-          `${context}: Kibana not found at ${kibanaUrl} — deployment may still be starting.`,
+          `${context}: API route returned 404 at ${kibanaUrl} — the endpoint may be unavailable, the base path may be misconfigured, or the deployment may still be starting.`,
         );
       case 429:
         throw new Error(
@@ -189,7 +189,10 @@ export async function listSpaces(
     })
     .catch((err: unknown) => {
       if (axios.isAxiosError(err) && err.response?.status === 404) {
-        return null; // Kibana not yet reachable — return empty list
+        logger.warn(
+          `listSpaces: Spaces API returned 404 at ${kibanaUrl} — the endpoint may be unavailable or the base path may be misconfigured. Returning empty list.`,
+        );
+        return null;
       }
       handleKibanaError(err, 'listSpaces', kibanaUrl);
     });
@@ -210,7 +213,7 @@ export async function deleteSpace(
   const headers = buildKibanaHeaders(credentials);
 
   await axios
-    .delete<unknown>(`${kibanaUrl}/api/spaces/space/${spaceId}`, {
+    .delete<unknown>(`${kibanaUrl}/api/spaces/space/${encodeURIComponent(spaceId)}`, {
       headers,
       timeout: REQUEST_TIMEOUT_MS,
     })
