@@ -153,9 +153,53 @@ function handleApiError(err: unknown, context: string): never {
   throw new Error(`${context}: ${getErrorMessage(err)}`);
 }
 
-/** Builds an HTTPS URL for an Elastic cluster endpoint (ES and Kibana both use port 9243 on Cloud). */
-function buildEndpointUrl(endpoint: string): string {
-  return `https://${endpoint}:9243`;
+/**
+ * Builds an HTTPS URL for an Elastic cluster resource, using the API-provided
+ * HTTPS port when available (falls back to the standard Cloud port 9243).
+ */
+function buildEndpointUrl(metadata: ResourceMetadata | undefined): string {
+  const endpoint = metadata?.endpoint;
+  if (!endpoint) {
+    throw new Error('Missing resource endpoint in deployment metadata.');
+  }
+  const httpsPort = metadata?.ports?.https ?? 9243;
+  return `https://${endpoint}:${httpsPort}`;
+}
+
+/**
+ * Selects a resource from a list by a preferred `ref_id`, falling back to the
+ * first resource that has a populated endpoint. This avoids blindly taking
+ * index `[0]` when the Cloud API may return resources in arbitrary order.
+ */
+function findResource(
+  resources: ApiResource[] | undefined,
+  preferredRefId: string,
+): ApiResource | undefined {
+  return (
+    resources?.find((r) => r.ref_id === preferredRefId) ??
+    resources?.find((r) => r.info?.metadata?.endpoint)
+  );
+}
+
+/**
+ * Derives the Elastic Cloud deployment template ID from the region string.
+ * Cloud templates are provider-specific; this keeps the template in sync with
+ * the chosen region without requiring the caller to know the template name.
+ */
+function getDeploymentTemplateId(region: string): string {
+  if (region.startsWith('aws-')) return 'aws-general-purpose';
+  if (region.startsWith('azure-')) return 'azure-general-purpose';
+  return 'gcp-general-purpose';
+}
+
+/**
+ * Derives the Kibana instance configuration ID from the region string.
+ * Like the deployment template, this is provider-specific.
+ */
+function getKibanaInstanceConfigId(region: string): string {
+  if (region.startsWith('aws-')) return 'aws.kibana.r5d';
+  if (region.startsWith('azure-')) return 'azure.kibana.e32sv3';
+  return 'gcp.kibana.1';
 }
 
 function allResourcesStarted(data: DeploymentGetResponse): boolean {
@@ -179,11 +223,14 @@ function extractResultFromGet(
   data: DeploymentGetResponse,
   knownStatus?: DeploymentResult['status'],
 ): DeploymentResult {
-  const esEndpoint = data.resources?.elasticsearch?.[0]?.info?.metadata?.endpoint ?? '';
-  const kbEndpoint = data.resources?.kibana?.[0]?.info?.metadata?.endpoint ?? '';
+  const esResource = findResource(data.resources?.elasticsearch, 'main-elasticsearch');
+  const kbResource = findResource(data.resources?.kibana, 'main-kibana');
 
-  const esUrl = esEndpoint ? buildEndpointUrl(esEndpoint) : '';
-  const kibanaUrl = kbEndpoint ? buildEndpointUrl(kbEndpoint) : '';
+  const esMetadata = esResource?.info?.metadata;
+  const kbMetadata = kbResource?.info?.metadata;
+
+  const esUrl = esMetadata?.endpoint ? buildEndpointUrl(esMetadata) : '';
+  const kibanaUrl = kbMetadata?.endpoint ? buildEndpointUrl(kbMetadata) : '';
 
   const credentials: ElasticCredentials = {
     url: esUrl,
@@ -216,7 +263,7 @@ export async function createDeployment(
     name: config.name,
     version: config.version,
     region,
-    deployment_template: { id: 'gcp-general-purpose' },
+    deployment_template: { id: getDeploymentTemplateId(region) },
     resources: {
       elasticsearch: [
         {
@@ -242,7 +289,7 @@ export async function createDeployment(
           plan: {
             cluster_topology: [
               {
-                instance_configuration_id: 'gcp.kibana.1',
+                instance_configuration_id: getKibanaInstanceConfigId(region),
                 zone_count: 1,
                 size: { value: 1024, resource: 'memory' },
               },
@@ -338,9 +385,10 @@ export async function waitForDeployment(
         shouldRetry: (err: unknown) => {
           if (axios.isAxiosError(err)) {
             const status = err.response?.status;
-            // Abort immediately on auth, not-found, or rate-limit errors — these
-            // are non-transient and won't resolve with more polling.
-            return status !== 401 && status !== 404 && status !== 429;
+            // Abort immediately only on clearly terminal API errors such as
+            // auth failures or missing deployments. Rate limiting (429) is
+            // typically transient and should continue polling.
+            return status !== 401 && status !== 404;
           }
           return true;
         },
@@ -353,13 +401,26 @@ export async function waitForDeployment(
 
     return result;
   } catch (err) {
+    const errorMessage = getErrorMessage(err);
+
     if (axios.isAxiosError(err)) {
-      spinner.fail('Deployment polling failed due to an API error.');
+      spinner.fail(
+        errorMessage
+          ? `Deployment polling failed due to an API error: ${errorMessage}`
+          : 'Deployment polling failed due to an API error.',
+      );
       // handleApiError always throws — typed as never.
       handleApiError(err, 'waitForDeployment');
     }
-    spinner.fail('Deployment did not become healthy within the timeout window.');
-    throw new Error('Deployment did not become healthy within the timeout window.');
+
+    const attemptSummary =
+      attempt > 0 ? ` after ${attempt} attempt${attempt === 1 ? '' : 's'}` : '';
+    const timeoutMessage = errorMessage
+      ? `Deployment did not become healthy within the timeout window${attemptSummary}. Last error: ${errorMessage}`
+      : `Deployment did not become healthy within the timeout window${attemptSummary}.`;
+
+    spinner.fail(timeoutMessage);
+    throw new Error(timeoutMessage);
   }
 }
 
