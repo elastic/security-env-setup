@@ -1,11 +1,10 @@
-import { execFileSync } from 'child_process';
-import path from 'path';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import type { Environment } from '../types';
 import { hasApiKey } from '../config/store';
 import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
+import { runAllDataGeneration } from '../runners/scripts';
 import { runWizard } from '../wizard/prompts';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
@@ -55,38 +54,6 @@ function printSummary(params: {
   logger.print(line);
   logger.print(chalk.dim('  Keep your password safe — it will not be shown again.'));
   logger.print('');
-}
-
-/**
- * Runs a data-generation script from the kibana repository.
- * Streams output directly to stdio so the user can see progress.
- * Errors are caught and logged as warnings — they must not abort the command.
- */
-function runDataScript(
-  kibanaRepoPath: string,
-  scriptName: string,
-  kibanaUrl: string,
-  username: string,
-  password: string,
-): void {
-  const scriptPath = path.join(
-    kibanaRepoPath,
-    'x-pack',
-    'plugins',
-    'security_solution',
-    'scripts',
-    scriptName,
-  );
-
-  try {
-    execFileSync(
-      'node',
-      [scriptPath, '--kibana-url', kibanaUrl, '--username', username, '--password', password],
-      { stdio: 'inherit' },
-    );
-  } catch (err) {
-    logger.warn(`Data generation script "${scriptName}" failed: ${getErrorMessage(err)}`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,41 +117,21 @@ async function runCreate(): Promise<void> {
 
   await initializeSecurityApp(deployment.kibanaUrl, credentials);
 
-  const { kibanaRepoPath, generateAlerts, generateCases, generateEvents } =
-    config.dataTypes;
+  const { kibanaRepoPath, generateAlerts, generateCases, generateEvents } = config.dataTypes;
 
   if (kibanaRepoPath.length > 0) {
-    if (generateAlerts) {
-      logger.info('Generating alerts and attack discoveries…');
-      runDataScript(
-        kibanaRepoPath,
-        'create_alerts.js',
-        deployment.kibanaUrl,
-        credentials.username,
-        credentials.password,
-      );
-    }
+    const dataResult = await runAllDataGeneration({
+      kibanaRepoPath,
+      kibanaUrl: deployment.kibanaUrl,
+      credentials,
+      spaceId: createdSpaces[0]?.id,
+      generateAlerts,
+      generateCases,
+      generateEvents,
+    });
 
-    if (generateCases) {
-      logger.info('Generating cases…');
-      runDataScript(
-        kibanaRepoPath,
-        'create_cases.js',
-        deployment.kibanaUrl,
-        credentials.username,
-        credentials.password,
-      );
-    }
-
-    if (generateEvents) {
-      logger.info('Generating events…');
-      runDataScript(
-        kibanaRepoPath,
-        'create_events.js',
-        deployment.kibanaUrl,
-        credentials.username,
-        credentials.password,
-      );
+    for (const errorMsg of dataResult.errors) {
+      logger.warn(errorMsg);
     }
   }
 
