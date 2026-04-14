@@ -1,9 +1,9 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import chalk from 'chalk';
 import { Command } from 'commander';
 import type { Environment } from '../types';
-import { hasApiKey, getApiKey } from '../config/store';
+import { getApiKey } from '../config/store';
 import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
 import { runWizard } from '../wizard/prompts';
@@ -79,8 +79,9 @@ function runDataScript(
   );
 
   try {
-    execSync(
-      `node ${scriptPath} --kibana-url ${kibanaUrl} --username ${username} --password "${password}"`,
+    execFileSync(
+      'node',
+      [scriptPath, '--kibana-url', kibanaUrl, '--username', username, '--password', password],
       { stdio: 'inherit' },
     );
   } catch (err) {
@@ -110,45 +111,27 @@ async function runCreate(): Promise<void> {
   // ── Step 1/5: Interactive wizard ──────────────────────────────────────────
   logger.step(1, TOTAL_STEPS, 'Running deployment wizard…');
 
-  const config = await runWizard();
+  const { config, environment } = await runWizard();
 
-  // Resolve environment from the wizard — the wizard stores the environment
-  // inside the deployment name step; we read it from the region prefix to
-  // determine the correct API key bucket. Because the wizard already collected
-  // it as part of prompt state, we re-derive it from the prompt output stored
-  // in `config`. For simplicity the wizard exposes it via a side-channel:
-  // we check which key bucket is configured and fall back to `prod`.
-  //
-  // A cleaner approach: extend DeploymentConfig with `environment`. However,
-  // the spec explicitly keeps environment out of DeploymentConfig, so we
-  // derive it by checking stored keys in priority order.
-  const candidateEnvs: Environment[] = ['prod', 'qa', 'staging'];
-  const env: Environment = candidateEnvs.find((e) => hasApiKey(e)) ?? 'prod';
-
-  if (!hasApiKey(env)) {
+  if (getApiKey(environment) === undefined) {
     logger.error(
-      `No API key configured for environment "${env}". Run: security-env-setup auth login`,
+      `No API key configured for environment "${environment}". Run: security-env-setup auth login`,
     );
-    process.exit(1);
-  }
-
-  const apiKey = getApiKey(env);
-  if (apiKey === undefined) {
-    logger.error('API key unexpectedly missing. Run: security-env-setup auth login');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // ── Step 2/5: Create deployment ───────────────────────────────────────────
-  logger.step(2, TOTAL_STEPS, `Creating deployment "${config.name}" on ${env}…`);
+  logger.info(`Creating deployment "${config.name}" on ${environment}…`);
 
-  const initialResult = await createDeployment(config, env);
+  const initialResult = await createDeployment(config, environment);
 
   // ── Step 3/5: Wait for deployment ─────────────────────────────────────────
   logger.step(3, TOTAL_STEPS, 'Waiting for deployment to become healthy…');
 
   const deployment = await waitForDeployment(
     initialResult.id,
-    env,
+    environment,
     initialResult.credentials,
   );
 
@@ -208,7 +191,7 @@ async function runCreate(): Promise<void> {
   // ── Summary ───────────────────────────────────────────────────────────────
   printSummary({
     name: config.name,
-    environment: env,
+    environment,
     kibanaUrl: deployment.kibanaUrl,
     esUrl: deployment.esUrl,
     username: credentials.username,
@@ -226,6 +209,6 @@ export const createCommand = new Command('create')
   .action((): void => {
     runCreate().catch((err: unknown) => {
       logger.error(`Deployment failed: ${getErrorMessage(err)}`);
-      process.exit(1);
+      process.exitCode = 1;
     });
   });

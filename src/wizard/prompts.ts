@@ -29,7 +29,7 @@ function nameToId(name: string): string {
 // Wizard
 // ---------------------------------------------------------------------------
 
-export async function runWizard(): Promise<DeploymentConfig> {
+export async function runWizard(): Promise<{ config: DeploymentConfig; environment: Environment }> {
   // ── Step 1: core deployment settings ──────────────────────────────────────
   const { name, environment } = await inquirer.prompt<{
     name: string;
@@ -108,9 +108,14 @@ export async function runWizard(): Promise<DeploymentConfig> {
         message: `Space ${i + 1} name:`,
         default: i === 0 ? 'Security' : `Space ${i + 1}`,
         validate: (input: string): boolean | string => {
-          if (input.trim().length === 0) return 'Space name is required.';
-          const id = nameToId(input);
+          const trimmed = input.trim();
+          if (trimmed.length === 0) return 'Space name is required.';
+          const id = nameToId(trimmed);
           if (id.length === 0) return 'Space name must produce a valid ID (alphanumeric + hyphens).';
+          if (spaces.some((s) => s.id === id))
+            return `A space with ID "${id}" already exists. Choose a different name.`;
+          if (spaces.some((s) => s.name.toLowerCase() === trimmed.toLowerCase()))
+            return `A space named "${trimmed}" already exists.`;
           return true;
         },
         filter: (input: string): string => input.trim(),
@@ -162,15 +167,18 @@ export async function runWizard(): Promise<DeploymentConfig> {
   }
 
   return {
-    name,
-    region,
-    version,
-    spaces,
-    dataTypes: {
-      kibanaRepoPath,
-      generateAlerts,
-      generateCases,
-      generateEvents,
+    config: {
+      name,
+      region,
+      version,
+      spaces,
+      dataTypes: {
+        kibanaRepoPath,
+        generateAlerts,
+        generateCases,
+        generateEvents,
+      },
     },
+    environment,
   };
 }
