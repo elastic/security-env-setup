@@ -33,6 +33,13 @@ interface SpaceCreatePayload {
   color?: string;
 }
 
+/** Result returned by {@link createSpace}, indicating whether the space was newly created. */
+export interface CreateSpaceResult {
+  space: KibanaSpace;
+  /** `true` when the space already existed (HTTP 409); `false` when it was just created. */
+  alreadyExisted: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -107,14 +114,15 @@ function mapSpaceResponse(data: KibanaSpaceApiShape): KibanaSpace {
 
 /**
  * Creates a single Kibana space.
- * Handles 409 gracefully: logs a warning and returns the input space unchanged
- * (the space already exists, which satisfies the caller's intent).
+ * Returns `{ space, alreadyExisted: true }` on HTTP 409 instead of logging
+ * directly, so callers with an active spinner can surface the message
+ * through the spinner without CLI rendering artefacts.
  */
 export async function createSpace(
   kibanaUrl: string,
   credentials: ElasticCredentials,
   space: KibanaSpace,
-): Promise<KibanaSpace> {
+): Promise<CreateSpaceResult> {
   const headers = buildKibanaHeaders(credentials);
 
   const payload: SpaceCreatePayload = {
@@ -136,11 +144,10 @@ export async function createSpace(
     });
 
   if (response === null) {
-    logger.warn(`Space "${space.name}" (id: ${space.id}) already exists — skipping.`);
-    return space;
+    return { space, alreadyExisted: true };
   }
 
-  return mapSpaceResponse(response.data);
+  return { space: mapSpaceResponse(response.data), alreadyExisted: false };
 }
 
 /**
@@ -159,9 +166,13 @@ export async function createSpaces(
   for (const space of spaces) {
     const spinner = ora(`Creating space "${space.name}"…`).start();
     try {
-      const created = await createSpace(kibanaUrl, credentials, space);
-      spinner.succeed(`Space "${space.name}" is ready.`);
-      results.push(created);
+      const { space: result, alreadyExisted } = await createSpace(kibanaUrl, credentials, space);
+      if (alreadyExisted) {
+        spinner.succeed(`Space "${space.name}" already exists — skipping.`);
+      } else {
+        spinner.succeed(`Space "${space.name}" created successfully.`);
+      }
+      results.push(result);
     } catch (err) {
       spinner.fail(`Failed to create space "${space.name}": ${getErrorMessage(err)}`);
       logger.warn(`Skipping space "${space.name}" — continuing with remaining spaces.`);
