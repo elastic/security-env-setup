@@ -199,7 +199,15 @@ export function extractIntegrityPackage(stderr: string): string | null {
     /error https?:\/\/registry\.yarnpkg\.com\/((?:@[^/]+\/)?[^/]+)\/-\/.*: Integrity check failed/.exec(
       stderr,
     );
-  return match?.[1] ?? null;
+  if (match?.[1] === undefined) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 /**

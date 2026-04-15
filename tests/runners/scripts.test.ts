@@ -187,6 +187,12 @@ describe('extractIntegrityPackage', () => {
     expect(extractIntegrityPackage(stderr)).toBe('@kbn/test');
   });
 
+  it('normalizes an encoded scoped package name from an integrity error', () => {
+    const stderr =
+      'error https://registry.yarnpkg.com/@kbn%2ftest/-/@kbn%2ftest-1.0.0.tgz: Integrity check failed';
+    expect(extractIntegrityPackage(stderr)).toBe('@kbn/test');
+  });
+
   it('returns null for a non-integrity error message', () => {
     expect(extractIntegrityPackage('error Command failed with exit code 1')).toBeNull();
   });
