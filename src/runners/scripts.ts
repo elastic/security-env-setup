@@ -9,6 +9,7 @@ import type {
   KibanaScriptPaths,
 } from '../types';
 import { getErrorMessage } from '../utils/errors';
+import logger from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -162,6 +163,46 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
 }
 
 /**
+ * Checks whether Kibana's Node dependencies are installed and, if not, runs
+ * `yarn kbn bootstrap` in the repo root before any data-generation scripts.
+ *
+ * Bootstrap is detected by the presence of `node_modules/@kbn/test-es-server`,
+ * a package that is only written during bootstrap and is required by the
+ * data-generation scripts. If it is absent bootstrap is triggered and the
+ * user sees live progress output via the spinner.
+ *
+ * Throws a clear, actionable error if bootstrap fails so the caller can
+ * surface it rather than receiving a cryptic "Cannot find module" from a
+ * downstream script.
+ */
+export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<void> {
+  const markerPath = path.join(kibanaRepoPath, 'node_modules', '@kbn', 'test-es-server');
+
+  if (fs.existsSync(markerPath)) {
+    logger.success('Kibana dependencies ready.');
+    return;
+  }
+
+  logger.warn(
+    "Kibana dependencies not found. Running yarn kbn bootstrap — this may take 20-40 minutes...",
+  );
+
+  try {
+    await spawnProcess(
+      YARN_CMD,
+      ['kbn', 'bootstrap'],
+      path.resolve(kibanaRepoPath),
+      process.env,
+      'Bootstrapping Kibana',
+    );
+  } catch (err) {
+    throw new Error(
+      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again.`,
+    );
+  }
+}
+
+/**
  * Runs `yarn test:generate` inside the security_solution plugin directory to
  * populate resolver / event data. Credentials are passed via environment
  * variables rather than CLI args.
@@ -245,6 +286,15 @@ export async function runGenerateCases(
 }
 
 /**
+ * If `msg` contains "Cannot find module" it appends a bootstrap hint so the
+ * error surfaced to the user is immediately actionable.
+ */
+function enhanceModuleError(msg: string): string {
+  if (!msg.includes('Cannot find module')) return msg;
+  return `${msg}\nHint: Run 'yarn kbn bootstrap' in your Kibana repo and try again.`;
+}
+
+/**
  * Orchestrates all selected data-generation scripts sequentially.
  * Individual script failures are captured in `result.errors` and do not abort
  * the remaining scripts.
@@ -268,12 +318,15 @@ export async function runAllDataGeneration(
     throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
   }
 
+  // Ensure dependencies are bootstrapped before running any script.
+  await ensureKibanaBootstrapped(options.kibanaRepoPath);
+
   if (options.generateEvents) {
     try {
       await runGenerateEvents(options.kibanaRepoPath, options.kibanaUrl, options.credentials);
       result.eventsRan = true;
     } catch (err) {
-      result.errors.push(`Events generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Events generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 
@@ -287,7 +340,7 @@ export async function runAllDataGeneration(
       );
       result.alertsRan = true;
     } catch (err) {
-      result.errors.push(`Alerts generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Alerts generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 
@@ -301,7 +354,7 @@ export async function runAllDataGeneration(
       );
       result.casesRan = true;
     } catch (err) {
-      result.errors.push(`Cases generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Cases generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 

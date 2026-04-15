@@ -10,6 +10,7 @@ import ora from 'ora';
 import { spawn } from 'child_process';
 import {
   detectKibanaScriptPaths,
+  ensureKibanaBootstrapped,
   runGenerateEvents,
   runGenerateAttacks,
   runGenerateCases,
@@ -86,6 +87,19 @@ function mockSpawnAutoClose(code = 0): void {
   });
 }
 
+// Emits stderr output followed by close, all via nextTick so listeners are
+// attached before events fire.
+function mockSpawnWithStderrAndClose(stderrText: string, code = 1): void {
+  const child = createMockChild();
+  mockedSpawn.mockImplementationOnce(() => {
+    process.nextTick(() => {
+      child.stderr.emit('data', Buffer.from(stderrText));
+      child.emit('close', code, null);
+    });
+    return child as unknown as ReturnType<typeof spawn>;
+  });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockSpinner.start.mockReturnThis();
@@ -134,6 +148,55 @@ describe('detectKibanaScriptPaths', () => {
   it('includes both candidate paths in the error message', () => {
     mockedFs.existsSync.mockImplementation((p) => p === REPO_PATH);
     expect(() => detectKibanaScriptPaths(REPO_PATH)).toThrow(/\(new\).*\(old\)/s);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureKibanaBootstrapped
+// ---------------------------------------------------------------------------
+
+describe('ensureKibanaBootstrapped', () => {
+  const BOOTSTRAP_MARKER = path.join(REPO_PATH, 'node_modules', '@kbn', 'test-es-server');
+
+  it('logs ready and does not spawn when marker directory exists', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === BOOTSTRAP_MARKER);
+    await ensureKibanaBootstrapped(REPO_PATH);
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('spawns yarn kbn bootstrap at the repo root when marker is absent', async () => {
+    mockedFs.existsSync.mockReturnValue(false);
+    mockSpawnAutoClose(0);
+    await ensureKibanaBootstrapped(REPO_PATH);
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      expect.stringMatching(/yarn/),
+      expect.arrayContaining(['kbn', 'bootstrap']),
+      expect.objectContaining({ cwd: path.resolve(REPO_PATH) }),
+    );
+  });
+
+  it('throws bootstrap-failed error when bootstrap process exits non-zero', async () => {
+    mockedFs.existsSync.mockReturnValue(false);
+    mockSpawnAutoClose(1);
+    await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow('Bootstrap failed');
+  });
+
+  it('throws bootstrap-failed error when yarn is not found (ENOENT)', async () => {
+    mockedFs.existsSync.mockReturnValue(false);
+    const child = createMockChild();
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+    const promise = ensureKibanaBootstrapped(REPO_PATH);
+    const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    child.emit('error', enoentErr);
+    await expect(promise).rejects.toThrow('Bootstrap failed');
+  });
+
+  it('bootstrap-failed error includes actionable instructions', async () => {
+    mockedFs.existsSync.mockReturnValue(false);
+    mockSpawnAutoClose(1);
+    await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow(
+      "run 'yarn kbn bootstrap' manually",
+    );
   });
 });
 
@@ -384,7 +447,10 @@ describe('runAllDataGeneration', () => {
         p === REPO_PATH ||
         p === path.resolve(REPO_PATH) ||
         p === NEW_PLUGIN_DIR ||
-        (typeof p === 'string' && p.includes('generate_cli.js'))
+        (typeof p === 'string' && p.includes('generate_cli.js')) ||
+        // Bootstrap marker — always present so ensureKibanaBootstrapped skips bootstrap
+        // in data-generation tests that are not specifically testing bootstrap behaviour.
+        (typeof p === 'string' && p.includes('node_modules'))
       );
     });
   });
@@ -473,5 +539,28 @@ describe('runAllDataGeneration', () => {
     expect(result.casesRan).toBe(false);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('Cases generation failed');
+  });
+
+  it('appends bootstrap hint when a script fails with Cannot find module', async () => {
+    mockSpawnWithStderrAndClose('Cannot find module @kbn/some-package');
+
+    const result = await runAllDataGeneration({
+      ...baseOptions,
+      generateEvents: true,
+    });
+
+    expect(result.eventsRan).toBe(false);
+    expect(result.errors[0]).toContain('yarn kbn bootstrap');
+  });
+
+  it('does not append bootstrap hint for unrelated script errors', async () => {
+    mockSpawnWithStderrAndClose('network timeout');
+
+    const result = await runAllDataGeneration({
+      ...baseOptions,
+      generateEvents: true,
+    });
+
+    expect(result.errors[0]).not.toContain('yarn kbn bootstrap');
   });
 });
