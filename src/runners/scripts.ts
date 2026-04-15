@@ -356,10 +356,9 @@ export async function runAllDataGeneration(
   const hasRequestedGeneration =
     options.generateEvents || options.generateAlerts || options.generateCases;
 
-  // Validate script paths and dependencies before running any selected script.
+  // Ensure dependencies are present before running any selected script.
+  // Individual runGenerate* functions already validate their required script paths.
   if (hasRequestedGeneration) {
-    // Fail fast on wrong repo roots before invoking potentially long bootstrap.
-    detectKibanaScriptPaths(options.kibanaRepoPath);
     await ensureKibanaBootstrapped(options.kibanaRepoPath);
   }
 

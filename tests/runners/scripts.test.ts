@@ -552,12 +552,14 @@ describe('runAllDataGeneration', () => {
     expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
-  it('fails before bootstrapping when security_solution plugin path cannot be detected', async () => {
-    mockedFs.existsSync.mockImplementation((p) => p === REPO_PATH || p === path.resolve(REPO_PATH));
-    await expect(
-      runAllDataGeneration({ ...baseOptions, generateEvents: true }),
-    ).rejects.toThrow('Could not find security_solution plugin');
-    expect(mockedSpawn).not.toHaveBeenCalled();
+  it('records script error when security_solution plugin path cannot be detected', async () => {
+    mockedFs.existsSync.mockImplementation(
+      (p) => p === REPO_PATH || p === path.resolve(REPO_PATH) || p === BOOTSTRAP_MARKER,
+    );
+    const result = await runAllDataGeneration({ ...baseOptions, generateEvents: true });
+    expect(result.eventsRan).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('Could not find security_solution plugin');
   });
 
   it('collects alerts error without aborting remaining scripts', async () => {
