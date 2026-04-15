@@ -69,9 +69,11 @@ function spawnProcess(
   cwd: string,
   env: NodeJS.ProcessEnv,
   spinnerLabel: string,
+  options?: { passthroughOutput?: boolean },
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const spinner = ora(spinnerLabel).start();
+    const passthroughOutput = options?.passthroughOutput === true;
+    const spinner = passthroughOutput ? undefined : ora(spinnerLabel).start();
     const stderrChunks: string[] = [];
 
     const child = spawn(command, args, {
@@ -81,6 +83,7 @@ function spawnProcess(
     });
 
     const updateSpinner = (chunk: unknown): void => {
+      if (spinner === undefined) return;
       const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
       // Show only the last non-empty line to keep the spinner tidy.
       const lastLine = text.split('\n').reverse().find((l) => l.trim().length > 0) ?? '';
@@ -89,15 +92,29 @@ function spawnProcess(
       }
     };
 
-    child.stdout?.on('data', updateSpinner);
+    child.stdout?.on('data', (chunk: unknown) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      if (passthroughOutput) {
+        process.stdout.write(text);
+      } else {
+        updateSpinner(chunk);
+      }
+    });
+
     child.stderr?.on('data', (chunk: unknown) => {
       const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
       stderrChunks.push(text);
-      updateSpinner(chunk);
+      if (passthroughOutput) {
+        process.stderr.write(text);
+      } else {
+        updateSpinner(chunk);
+      }
     });
 
     child.on('error', (err: Error) => {
-      spinner.fail(`${spinnerLabel} — failed to start`);
+      if (spinner !== undefined) {
+        spinner.fail(`${spinnerLabel} — failed to start`);
+      }
       const message =
         'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT'
           ? `Command not found: "${command}". Make sure it is installed and on PATH.`
@@ -107,13 +124,21 @@ function spawnProcess(
 
     child.on('close', (code: number | null) => {
       if (code === 0) {
-        spinner.succeed(`${spinnerLabel} — done`);
+        if (spinner !== undefined) {
+          spinner.succeed(`${spinnerLabel} — done`);
+        } else {
+          logger.success(`${spinnerLabel} — done`);
+        }
         resolve();
       } else {
         const codeStr = code !== null ? String(code) : 'unknown';
         const stderr = stderrChunks.join('').trim();
         const detail = stderr.length > 0 ? `\nstderr:\n${stderr}` : '';
-        spinner.fail(`${spinnerLabel} — exited with code ${codeStr}`);
+        if (spinner !== undefined) {
+          spinner.fail(`${spinnerLabel} — exited with code ${codeStr}`);
+        } else {
+          logger.error(`${spinnerLabel} — exited with code ${codeStr}`);
+        }
         reject(new Error(`Process exited with code ${codeStr}${detail}`));
       }
     });
@@ -168,8 +193,8 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
  *
  * Bootstrap is detected by the presence of `node_modules/@kbn/test-es-server`,
  * a package that is only written during bootstrap and is required by the
- * data-generation scripts. If it is absent bootstrap is triggered and the
- * user sees live progress output via the spinner.
+ * data-generation scripts. If it is absent bootstrap is triggered and full
+ * process output is streamed to the terminal.
  *
  * Throws a clear, actionable error if bootstrap fails so the caller can
  * surface it rather than receiving a cryptic "Cannot find module" from a
@@ -200,6 +225,7 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
       resolvedRepoPath,
       process.env,
       'Bootstrapping Kibana',
+      { passthroughOutput: true },
     );
   } catch (err) {
     throw new Error(
@@ -330,8 +356,9 @@ export async function runAllDataGeneration(
   const hasRequestedGeneration =
     options.generateEvents || options.generateAlerts || options.generateCases;
 
-  // Ensure dependencies are bootstrapped before running any selected script.
+  // Validate script paths and dependencies before running any selected script.
   if (hasRequestedGeneration) {
+    detectKibanaScriptPaths(options.kibanaRepoPath);
     await ensureKibanaBootstrapped(options.kibanaRepoPath);
   }
 

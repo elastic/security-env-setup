@@ -215,6 +215,27 @@ describe('ensureKibanaBootstrapped', () => {
       'Underlying error: Process exited with code 1',
     );
   });
+
+  it('streams bootstrap stdout/stderr to terminal output', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    const child = createMockChild();
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+    const stdoutSpy = jest.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      const promise = ensureKibanaBootstrapped(REPO_PATH);
+      child.stdout.emit('data', Buffer.from('bootstrap stdout\n'));
+      child.stderr.emit('data', Buffer.from('bootstrap stderr\n'));
+      child.emit('close', 0, null);
+      await promise;
+
+      expect(stdoutSpy).toHaveBeenCalledWith('bootstrap stdout\n');
+      expect(stderrSpy).toHaveBeenCalledWith('bootstrap stderr\n');
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -466,9 +487,9 @@ describe('runAllDataGeneration', () => {
         p === path.resolve(REPO_PATH) ||
         p === NEW_PLUGIN_DIR ||
         (typeof p === 'string' && p.includes('generate_cli.js')) ||
-        // Bootstrap marker — always present so ensureKibanaBootstrapped skips bootstrap
-        // in data-generation tests that are not specifically testing bootstrap behaviour.
-        (typeof p === 'string' && p.includes('node_modules'))
+        // Bootstrap marker — present so ensureKibanaBootstrapped skips bootstrap
+        // unless a test overrides this mock behavior.
+        p === BOOTSTRAP_MARKER
       );
     });
   });
@@ -528,6 +549,14 @@ describe('runAllDataGeneration', () => {
     await expect(
       runAllDataGeneration({ ...baseOptions, generateEvents: true }),
     ).rejects.toThrow('Kibana repository not found');
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('fails before bootstrapping when security_solution plugin path cannot be detected', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === REPO_PATH || p === path.resolve(REPO_PATH));
+    await expect(
+      runAllDataGeneration({ ...baseOptions, generateEvents: true }),
+    ).rejects.toThrow('Could not find security_solution plugin');
     expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
