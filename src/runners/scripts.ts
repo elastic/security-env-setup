@@ -276,7 +276,7 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
   if (firstPackage === null) {
     throw new Error(
       `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${firstMessage}`,
-      { cause: bootstrapError as Error },
+      { cause: bootstrapError },
     );
   }
 
