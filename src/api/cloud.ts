@@ -7,6 +7,7 @@ import { retry } from '../utils/retry';
 import logger from '../utils/logger';
 import { buildHeaders } from '../utils/http';
 import { getErrorMessage } from '../utils/errors';
+import { REGIONS } from '../regions';
 
 // ---------------------------------------------------------------------------
 // Internal API response types — never exported
@@ -39,17 +40,19 @@ interface DeploymentGetResponse {
   };
 }
 
+/** One entry in the flat resources array returned by POST /api/v1/deployments */
+interface CreateDeploymentApiResource {
+  kind: string;
+  ref_id?: string;
+  credentials?: { username?: string; password?: string } | null;
+}
+
 /** Shape returned by POST /api/v1/deployments */
 interface CreateDeploymentApiResponse {
   id: string;
   created?: boolean;
   name?: string;
-  resources?: {
-    elasticsearch?: Array<{
-      ref_id?: string;
-      credentials?: { username?: string; password?: string };
-    }>;
-  };
+  resources?: CreateDeploymentApiResource[];
 }
 
 /** Shape returned by GET /api/v1/deployments */
@@ -57,55 +60,53 @@ interface ListDeploymentsApiResponse {
   deployments?: DeploymentGetResponse[];
 }
 
-// ---------------------------------------------------------------------------
-// Internal payload types for deployment creation
-// ---------------------------------------------------------------------------
+export { REGIONS } from '../regions';
 
-interface ClusterSize {
-  value: number;
-  resource: string;
-}
-
-interface EsTopologyItem {
-  node_type: { master: boolean; data: boolean; ingest: boolean };
-  zone_count: number;
-  size: ClusterSize;
-}
-
-interface KibanaTopologyItem {
-  instance_configuration_id: string;
-  zone_count: number;
-  size: ClusterSize;
-}
-
-interface CreateDeploymentPayload {
-  name: string;
-  version: string;
-  region: string;
-  deployment_template: { id: string };
-  resources: {
-    elasticsearch: Array<{
-      ref_id: string;
-      region: string;
-      plan: {
-        cluster_topology: EsTopologyItem[];
-        elasticsearch: { version: string };
-      };
-    }>;
-    kibana: Array<{
-      ref_id: string;
-      elasticsearch_cluster_ref_id: string;
-      region: string;
-      plan: {
-        cluster_topology: KibanaTopologyItem[];
-        kibana: { version: string };
-      };
-    }>;
-  };
+/** Returns the list of available regions for the given environment. */
+export function listAvailableRegions(env: Environment): Promise<string[]> {
+  return Promise.resolve([...REGIONS[env]]);
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Instance configuration IDs — verified against the Elastic Cloud API
+// ---------------------------------------------------------------------------
+
+/** Deployment template ID that works across all providers. */
+const DEPLOYMENT_TEMPLATE_ID = 'gcp-storage-optimized';
+
+interface InstanceConfig {
+  datahot: string;
+  kibana: string;
+  integrations: string;
+}
+
+const INSTANCE_CONFIGS: { gcp: InstanceConfig; aws: InstanceConfig; azure: InstanceConfig } = {
+  gcp: {
+    datahot: 'gcp.es.datahot.n2.68x10x45',
+    kibana: 'gcp.kibana.n2.68x32x45',
+    integrations: 'gcp.integrationsserver.n2.68x32x45',
+  },
+  aws: {
+    datahot: 'aws.es.datahot.m6g.12xlarge',
+    kibana: 'aws.kibana.r6gd.xlarge.x86_64',
+    integrations: 'aws.integrationsserver.r6gd.xlarge.x86_64',
+  },
+  azure: {
+    datahot: 'azure.es.datahot.ddv4.2xlarge',
+    kibana: 'azure.kibana.e32sv3',
+    integrations: 'azure.integrationsserver.e32sv3',
+  },
+};
+
+function getInstanceConfigs(region: string): InstanceConfig {
+  const provider = region.split('-')[0];
+  if (provider === 'aws') return INSTANCE_CONFIGS.aws;
+  if (provider === 'azure') return INSTANCE_CONFIGS.azure;
+  return INSTANCE_CONFIGS.gcp;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
 // ---------------------------------------------------------------------------
 
 /** Timeout for one-off operations (create/list/delete). */
@@ -141,8 +142,6 @@ function handleApiError(err: unknown, context: string): never {
       case 429:
         throw new Error(`${context}: API rate limit exceeded — please wait before retrying.`);
       default: {
-        // Include the underlying axios message (e.g. "Network Error", "timeout of Xms exceeded",
-        // or a server-side error summary) to aid debugging network and unexpected HTTP failures.
         const detail = err.message ? ` — ${err.message}` : '';
         throw new Error(
           `${context}: API request failed${status !== undefined ? ` with HTTP ${String(status)}` : ''}${detail}`,
@@ -179,27 +178,6 @@ function findResource(
     resources?.find((r) => r.ref_id === preferredRefId) ??
     resources?.find((r) => r.info?.metadata?.endpoint)
   );
-}
-
-/**
- * Derives the Elastic Cloud deployment template ID from the region string.
- * Cloud templates are provider-specific; this keeps the template in sync with
- * the chosen region without requiring the caller to know the template name.
- */
-function getDeploymentTemplateId(region: string): string {
-  if (region.startsWith('aws-')) return 'aws-general-purpose';
-  if (region.startsWith('azure-')) return 'azure-general-purpose';
-  return 'gcp-general-purpose';
-}
-
-/**
- * Derives the Kibana instance configuration ID from the region string.
- * Like the deployment template, this is provider-specific.
- */
-function getKibanaInstanceConfigId(region: string): string {
-  if (region.startsWith('aws-')) return 'aws.kibana.r5d';
-  if (region.startsWith('azure-')) return 'azure.kibana.e32sv3';
-  return 'gcp.kibana.1';
 }
 
 function allResourcesStarted(data: DeploymentGetResponse): boolean {
@@ -258,12 +236,10 @@ export async function createDeployment(
   const apiKey = requireApiKey(env);
   const trimmedRegion = config.region.trim();
   const region = trimmedRegion.length > 0 ? trimmedRegion : 'gcp-us-central1';
+  const configs = getInstanceConfigs(region);
 
-  const payload: CreateDeploymentPayload = {
+  const payload = {
     name: config.name,
-    version: config.version,
-    region,
-    deployment_template: { id: getDeploymentTemplateId(region) },
     resources: {
       elasticsearch: [
         {
@@ -272,12 +248,19 @@ export async function createDeployment(
           plan: {
             cluster_topology: [
               {
-                node_type: { master: true, data: true, ingest: true },
+                id: 'hot_content',
+                node_roles: [
+                  'master', 'ingest', 'transform', 'data_hot',
+                  'remote_cluster_client', 'data_content',
+                ],
                 zone_count: 1,
+                elasticsearch: { node_attributes: { data: 'hot' } },
+                instance_configuration_id: configs.datahot,
                 size: { value: 4096, resource: 'memory' },
               },
             ],
             elasticsearch: { version: config.version },
+            deployment_template: { id: DEPLOYMENT_TEMPLATE_ID },
           },
         },
       ],
@@ -289,15 +272,19 @@ export async function createDeployment(
           plan: {
             cluster_topology: [
               {
-                instance_configuration_id: getKibanaInstanceConfigId(region),
-                zone_count: 1,
+                instance_configuration_id: configs.kibana,
                 size: { value: 1024, resource: 'memory' },
+                zone_count: 1,
               },
             ],
             kibana: { version: config.version },
           },
         },
       ],
+    },
+    settings: {
+      autoscaling_enabled: false,
+      solution_type: 'security',
     },
   };
 
@@ -311,7 +298,7 @@ export async function createDeployment(
     )
     .catch((err: unknown) => handleApiError(err, 'createDeployment'));
 
-  const creds = response.data.resources?.elasticsearch?.[0]?.credentials;
+  const creds = response.data.resources?.find((r) => r.kind === 'elasticsearch')?.credentials;
 
   // URLs are not available at creation time; call waitForDeployment to populate them.
   const credentials: ElasticCredentials = {
