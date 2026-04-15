@@ -358,6 +358,7 @@ export async function runAllDataGeneration(
 
   // Validate script paths and dependencies before running any selected script.
   if (hasRequestedGeneration) {
+    // Fail fast on wrong repo roots before invoking potentially long bootstrap.
     detectKibanaScriptPaths(options.kibanaRepoPath);
     await ensureKibanaBootstrapped(options.kibanaRepoPath);
   }
