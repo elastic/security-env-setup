@@ -48,6 +48,8 @@ export interface KibanaScriptPaths {
   generateCli: string;
   /** Absolute path used as the working directory for `yarn test:generate` (same as scriptDir). */
   testGenerate: string;
+  /** Absolute path to the cases plugin's generate_cases.js script. */
+  generateCasesScript: string;
 }
 
 export interface DataGenerationRunOptions {

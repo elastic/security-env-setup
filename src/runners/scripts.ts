@@ -31,6 +31,17 @@ const OLD_PLUGIN_REL = path.join('x-pack', 'plugins', 'security_solution');
 /** Path to the shared data-generation entry point, relative to the plugin root. */
 const GENERATE_CLI_REL = path.join('scripts', 'data', 'generate_cli.js');
 
+/**
+ * Cases plugin location changed in the Kibana monorepo restructure.
+ * We try the new path first, then fall back to the old one.
+ */
+const NEW_CASES_SCRIPT_REL = path.join(
+  'x-pack', 'platform', 'plugins', 'shared', 'cases', 'scripts', 'generate_cases.js',
+);
+const OLD_CASES_SCRIPT_REL = path.join(
+  'x-pack', 'plugins', 'cases', 'scripts', 'generate_cases.js',
+);
+
 /** Resolve the correct yarn binary name for the host platform. */
 const YARN_CMD = process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
 
@@ -179,11 +190,26 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
     );
   }
 
+  const newCasesScript = path.join(resolvedRepoPath, NEW_CASES_SCRIPT_REL);
+  const oldCasesScript = path.join(resolvedRepoPath, OLD_CASES_SCRIPT_REL);
+  let generateCasesScript: string;
+  if (fs.existsSync(newCasesScript)) {
+    generateCasesScript = newCasesScript;
+  } else if (fs.existsSync(oldCasesScript)) {
+    generateCasesScript = oldCasesScript;
+  } else {
+    throw new Error(
+      `Could not find generate cases script inside "${resolvedRepoPath}".\n` +
+        `Looked for:\n  (new) ${newCasesScript}\n  (old) ${oldCasesScript}`,
+    );
+  }
+
   return {
     scriptDir,
     generateCli: path.join(scriptDir, GENERATE_CLI_REL),
     // testGenerate is the cwd from which `yarn test:generate` is invoked.
     testGenerate: scriptDir,
+    generateCasesScript,
   };
 }
 
@@ -341,16 +367,18 @@ export async function runGenerateEvents(
   kibanaUrl: string,
   credentials: ElasticCredentials,
 ): Promise<void> {
-  const { testGenerate } = detectKibanaScriptPaths(kibanaRepoPath);
+  const { scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
   const env = buildScriptEnv(kibanaUrl, credentials);
 
-  // Non-sensitive flags are passed as CLI args; the password is in the env.
+  // Credentials are injected via environment variables; the script reads them
+  // from the environment rather than accepting CLI flags.
   await spawnProcess(
     YARN_CMD,
-    ['test:generate', '--kibana', kibanaUrl, '--username', credentials.username],
-    testGenerate,
+    ['test:generate'],
+    scriptDir,
     env,
     'Generating events',
+    { passthroughOutput: true },
   );
 }
 
@@ -370,9 +398,14 @@ export async function runGenerateAttacks(
     throw new Error(`generate_cli.js not found at: ${generateCli}`);
   }
 
-  const args = ['--attacks', '--kibana', kibanaUrl, '--username', credentials.username];
+  const args = [
+    '--attacks',
+    '--kibanaUrl', kibanaUrl,
+    '--elasticsearchUrl', credentials.url,
+    '--username', credentials.username,
+  ];
   if (spaceId !== undefined && spaceId.trim().length > 0) {
-    args.push('--space', spaceId.trim());
+    args.push('--spaceId', spaceId.trim());
   }
 
   await spawnProcess(
@@ -385,8 +418,9 @@ export async function runGenerateAttacks(
 }
 
 /**
- * Runs `node generate_cli.js --cases` to create sample case data.
- * Optionally scopes the run to a specific Kibana space.
+ * Runs `node generate_cases.js` from the cases plugin to create sample case
+ * data. This script uses `--kibana` and `--space` (not the generate_cli.js
+ * convention).
  */
 export async function runGenerateCases(
   kibanaRepoPath: string,
@@ -394,20 +428,26 @@ export async function runGenerateCases(
   credentials: ElasticCredentials,
   spaceId?: string,
 ): Promise<void> {
-  const { generateCli, scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
+  const { generateCasesScript, scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
 
-  if (!fs.existsSync(generateCli)) {
-    throw new Error(`generate_cli.js not found at: ${generateCli}`);
+  if (typeof credentials.password === 'string' && credentials.password.trim().length > 0) {
+    logger.warn(
+      'Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.',
+    );
   }
 
-  const args = ['--cases', '--kibana', kibanaUrl, '--username', credentials.username];
+  const args = [
+    '--kibana', kibanaUrl,
+    '--username', credentials.username,
+    '--password', credentials.password,
+  ];
   if (spaceId !== undefined && spaceId.trim().length > 0) {
     args.push('--space', spaceId.trim());
   }
 
   await spawnProcess(
     'node',
-    [generateCli, ...args],
+    [generateCasesScript, ...args],
     scriptDir,
     buildScriptEnv(kibanaUrl, credentials),
     'Generating cases',
