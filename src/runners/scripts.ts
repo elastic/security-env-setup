@@ -430,13 +430,11 @@ export async function runGenerateCases(
 ): Promise<void> {
   const { generateCasesScript, scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
 
-  if (!fs.existsSync(generateCasesScript)) {
-    throw new Error(`generate_cases.js not found at: ${generateCasesScript}`);
+  if (typeof credentials.password === 'string' && credentials.password.trim().length > 0) {
+    logger.warn(
+      'Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.',
+    );
   }
-
-  logger.warn(
-    'Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.',
-  );
 
   const args = [
     '--kibana', kibanaUrl,

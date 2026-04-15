@@ -153,7 +153,7 @@ describe('detectKibanaScriptPaths', () => {
 
   it('falls back to old plugin path when new does not exist', () => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === OLD_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
+      return p === REPO_PATH || p === OLD_PLUGIN_DIR || p === OLD_CASES_SCRIPT;
     });
     const paths = detectKibanaScriptPaths(REPO_PATH);
     expect(paths.scriptDir).toBe(OLD_PLUGIN_DIR);
@@ -610,8 +610,19 @@ describe('runGenerateCases', () => {
     await promise;
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Passing Elasticsearch password via --password'),
+      expect.stringContaining(
+        'Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.',
+      ),
     );
+  });
+
+  it('does not warn when password is empty/whitespace', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, { ...CREDS, password: '   ' });
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
   });
 
   it('appends --space flag when spaceId is provided', async () => {
@@ -643,6 +654,7 @@ describe('runGenerateCases', () => {
     await expect(runGenerateCases(REPO_PATH, KIBANA_URL, CREDS)).rejects.toThrow(
       'Could not find generate cases script inside',
     );
+    await expect(runGenerateCases(REPO_PATH, KIBANA_URL, CREDS)).rejects.toThrow(/\(new\).*\(old\)/s);
   });
 });
 
