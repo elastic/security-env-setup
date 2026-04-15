@@ -1,16 +1,11 @@
 import fs from 'fs';
 import * as inquirer from 'inquirer';
 import type { DeploymentConfig, Environment, KibanaSpace } from '../types';
+import { REGIONS } from '../api/cloud';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const REGIONS_BY_ENV: Record<Environment, string[]> = {
-  prod: ['gcp-us-central1', 'gcp-europe-west1', 'aws-us-east-1', 'azure-eastus2'],
-  staging: ['gcp-us-central1', 'gcp-europe-west1', 'aws-us-east-1', 'azure-eastus2'],
-  qa: ['gcp-us-central1', 'gcp-us-west2'],
-};
 
 const DEFAULT_VERSION = '8.17.1';
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
@@ -63,11 +58,13 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
       type: 'list',
       name: 'region',
       message: 'Region:',
-      choices: REGIONS_BY_ENV[environment],
+      choices: REGIONS[environment],
     },
   ]);
 
   // ── Step 3: stack version ──────────────────────────────────────────────────
+  // filter returns DEFAULT_VERSION when the user presses Enter without typing,
+  // ensuring that accepting the default always produces a valid semver string.
   const { version } = await inquirer.prompt<{ version: string }>([
     {
       type: 'input',
@@ -75,10 +72,11 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
       message: 'Stack version:',
       default: DEFAULT_VERSION,
       validate: (input: string): boolean | string => {
-        if (!SEMVER_RE.test(input.trim())) return 'Version must be a valid semver (e.g. 8.17.1).';
+        if (!SEMVER_RE.test(input.trim()))
+          return 'Version must be a valid semver (e.g. 8.17.1).';
         return true;
       },
-      filter: (input: string): string => input.trim(),
+      filter: (input: string): string => input.trim() || DEFAULT_VERSION,
     },
   ]);
 
@@ -156,8 +154,7 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
         validate: (input: string): boolean | string => {
           const trimmed = input.trim();
           if (trimmed.length === 0) return true; // skip is valid
-          if (!fs.existsSync(trimmed))
-            return `Path does not exist: ${trimmed}`;
+          if (!fs.existsSync(trimmed)) return `Path does not exist: ${trimmed}`;
           return true;
         },
         filter: (input: string): string => input.trim(),

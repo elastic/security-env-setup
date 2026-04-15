@@ -15,6 +15,8 @@ import {
   waitForDeployment,
   listDeployments,
   deleteDeployment,
+  listAvailableRegions,
+  REGIONS,
 } from '@api/cloud';
 import type { DeploymentConfig } from '@types-local/index';
 
@@ -84,20 +86,25 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('createDeployment', () => {
-  it('posts to the correct URL with ApiKey header', async () => {
+  function mockPost(id = 'dep-1', name = 'test-deploy', password = 'pass'): void {
     mockedAxios.post.mockResolvedValueOnce({
       data: {
-        id: 'dep-1',
-        name: 'test-deploy',
-        resources: { elasticsearch: [{ ref_id: 'main-es', credentials: { username: 'elastic', password: 'pass' } }] },
+        id,
+        name,
+        resources: [
+          { kind: 'elasticsearch', ref_id: 'main-elasticsearch', credentials: { username: 'elastic', password } },
+          { kind: 'kibana', ref_id: 'main-kibana', credentials: null },
+        ],
       },
     });
+  }
 
+  it('posts to the correct URL with ApiKey header', async () => {
+    mockPost();
     const result = await createDeployment(CONFIG, 'prod');
-
     expect(mockedAxios.post).toHaveBeenCalledWith(
       'https://api.elastic-cloud.com/api/v1/deployments',
-      expect.objectContaining({ name: 'test-deploy', version: '8.17.1' }),
+      expect.objectContaining({ name: 'test-deploy' }),
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'ApiKey test-api-key' }),
       }),
@@ -110,18 +117,14 @@ describe('createDeployment', () => {
 
   it('throws when no API key is configured', async () => {
     mockedGetApiKey.mockReturnValue(undefined);
-    await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow(
-      'No API key configured',
-    );
+    await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow('No API key configured');
   });
 
-  it('throws meaningful message on 401', async () => {
+  it('throws meaningful message on POST 401', async () => {
     const axiosErr = { isAxiosError: true, response: { status: 401 }, message: 'Unauthorized' };
     mockedAxios.post.mockRejectedValueOnce(axiosErr);
     mockedAxios.isAxiosError.mockReturnValue(true);
-    await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow(
-      'Invalid or expired API key',
-    );
+    await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow('Invalid or expired API key');
   });
 
   it('throws meaningful message on 429', async () => {
@@ -138,37 +141,131 @@ describe('createDeployment', () => {
     await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow('API request failed');
   });
 
-  it('selects gcp template for gcp region', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      data: { id: 'd', resources: { elasticsearch: [{ credentials: {} }] } },
-    });
-    await createDeployment({ ...CONFIG, region: 'gcp-us-central1' }, 'prod');
-    const payload = mockedAxios.post.mock.calls[0][1] as { deployment_template: { id: string } };
-    expect(payload.deployment_template.id).toBe('gcp-general-purpose');
-  });
-
-  it('selects aws template for aws region', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      data: { id: 'd', resources: { elasticsearch: [{ credentials: {} }] } },
-    });
-    await createDeployment({ ...CONFIG, region: 'aws-us-east-1' }, 'prod');
-    const payload = mockedAxios.post.mock.calls[0][1] as { deployment_template: { id: string } };
-    expect(payload.deployment_template.id).toBe('aws-general-purpose');
-  });
-
-  it('selects azure template for azure region', async () => {
-    mockedAxios.post.mockResolvedValueOnce({
-      data: { id: 'd', resources: { elasticsearch: [{ credentials: {} }] } },
-    });
-    await createDeployment({ ...CONFIG, region: 'azure-eastus2' }, 'prod');
-    const payload = mockedAxios.post.mock.calls[0][1] as { deployment_template: { id: string } };
-    expect(payload.deployment_template.id).toBe('azure-general-purpose');
-  });
-
-  it('throws with non-axios error wrapping context', async () => {
+  it('throws with non-axios error message', async () => {
     mockedAxios.post.mockRejectedValueOnce(new Error('socket hang up'));
     mockedAxios.isAxiosError.mockReturnValue(false);
     await expect(createDeployment(CONFIG, 'prod')).rejects.toThrow('socket hang up');
+  });
+
+  it('does not call axios.get (no template fetching)', async () => {
+    mockPost();
+    await createDeployment(CONFIG, 'prod');
+    expect(mockedAxios.get).not.toHaveBeenCalled();
+  });
+
+  it('places deployment_template.id inside the ES resource plan', async () => {
+    mockPost();
+    await createDeployment(CONFIG, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const esArr = (payload['resources'] as Record<string, unknown>)['elasticsearch'] as Array<Record<string, unknown>>;
+    const plan = esArr[0]['plan'] as Record<string, unknown>;
+    const dt = plan['deployment_template'] as { id: string };
+    expect(dt.id).toBe('gcp-storage-optimized');
+  });
+
+  it('sets version inside ES and Kibana resource plans', async () => {
+    mockPost();
+    await createDeployment(CONFIG, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const resources = payload['resources'] as Record<string, unknown>;
+
+    const esArr = resources['elasticsearch'] as Array<Record<string, unknown>>;
+    const esPlan = esArr[0]['plan'] as Record<string, unknown>;
+    expect((esPlan['elasticsearch'] as { version: string }).version).toBe('8.17.1');
+
+    const kbArr = resources['kibana'] as Array<Record<string, unknown>>;
+    const kbPlan = kbArr[0]['plan'] as Record<string, unknown>;
+    expect((kbPlan['kibana'] as { version: string }).version).toBe('8.17.1');
+  });
+
+  it('sets settings.solution_type to "security" and disables autoscaling', async () => {
+    mockPost();
+    await createDeployment(CONFIG, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const settings = payload['settings'] as { autoscaling_enabled: boolean; solution_type: string };
+    expect(settings.solution_type).toBe('security');
+    expect(settings.autoscaling_enabled).toBe(false);
+  });
+
+  it('uses gcp instance config IDs for gcp regions', async () => {
+    mockPost();
+    await createDeployment({ ...CONFIG, region: 'gcp-us-central1' }, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const esArr = (payload['resources'] as Record<string, unknown>)['elasticsearch'] as Array<Record<string, unknown>>;
+    const topology = ((esArr[0]['plan'] as Record<string, unknown>)['cluster_topology'] as Array<Record<string, unknown>>)[0];
+    expect(topology['instance_configuration_id']).toBe('gcp.es.datahot.n2.68x10x45');
+  });
+
+  it('uses aws instance config IDs for aws regions', async () => {
+    mockPost();
+    await createDeployment({ ...CONFIG, region: 'aws-us-east-1' }, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const esArr = (payload['resources'] as Record<string, unknown>)['elasticsearch'] as Array<Record<string, unknown>>;
+    const topology = ((esArr[0]['plan'] as Record<string, unknown>)['cluster_topology'] as Array<Record<string, unknown>>)[0];
+    expect(topology['instance_configuration_id']).toBe('aws.es.datahot.m6g.12xlarge');
+  });
+
+  it('uses azure instance config IDs for azure regions', async () => {
+    mockPost();
+    await createDeployment({ ...CONFIG, region: 'azure-eastus2' }, 'prod');
+    const payload = mockedAxios.post.mock.calls[0][1] as Record<string, unknown>;
+    const esArr = (payload['resources'] as Record<string, unknown>)['elasticsearch'] as Array<Record<string, unknown>>;
+    const topology = ((esArr[0]['plan'] as Record<string, unknown>)['cluster_topology'] as Array<Record<string, unknown>>)[0];
+    expect(topology['instance_configuration_id']).toBe('azure.es.datahot.ddv4.2xlarge');
+  });
+
+  it('extracts credentials from the flat resources array by kind', async () => {
+    mockPost('dep-creds', 'test-deploy', 'secret-pw');
+    const result = await createDeployment(CONFIG, 'prod');
+    expect(result.credentials.password).toBe('secret-pw');
+    expect(result.credentials.username).toBe('elastic');
+  });
+
+  it('falls back to empty password when resources array is empty', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: { id: 'dep-x', resources: [] } });
+    const result = await createDeployment(CONFIG, 'prod');
+    expect(result.credentials.password).toBe('');
+  });
+
+  it('falls back to empty password when resources is absent', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: { id: 'dep-x' } });
+    const result = await createDeployment(CONFIG, 'prod');
+    expect(result.credentials.password).toBe('');
+  });
+
+  it('falls back to empty password when no elasticsearch resource is present', async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        id: 'dep-x',
+        resources: [{ kind: 'kibana', ref_id: 'main-kibana', credentials: null }],
+      },
+    });
+    const result = await createDeployment(CONFIG, 'prod');
+    expect(result.credentials.password).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listAvailableRegions / REGIONS
+// ---------------------------------------------------------------------------
+
+describe('listAvailableRegions', () => {
+  it('returns prod regions including gcp, aws, and azure entries', async () => {
+    const regions = await listAvailableRegions('prod');
+    expect(regions).toContain('gcp-us-central1');
+    expect(regions).toContain('aws-us-east-1');
+    expect(regions).toContain('azure-eastus2');
+  });
+
+  it('returns exactly the qa region list', async () => {
+    const regions = await listAvailableRegions('qa');
+    expect(regions).toEqual(REGIONS.qa);
+    expect(regions).toHaveLength(2);
+  });
+
+  it('returns exactly the staging region list', async () => {
+    const regions = await listAvailableRegions('staging');
+    expect(regions).toEqual(REGIONS.staging);
   });
 });
 
