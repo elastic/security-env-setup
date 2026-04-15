@@ -188,6 +188,38 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
 }
 
 /**
+ * Extracts the package name from a yarn integrity-check error message.
+ * Returns `null` if the message does not match the expected pattern.
+ *
+ * Matched pattern:
+ *   error https://registry.yarnpkg.com/<pkg>/-/...: Integrity check failed
+ */
+export function extractIntegrityPackage(stderr: string): string | null {
+  const match =
+    /error https?:\/\/registry\.yarnpkg\.com\/((?:@[^/]+\/)?[^/]+)\/-\/.*: Integrity check failed/.exec(
+      stderr,
+    );
+  return match?.[1] ?? null;
+}
+
+/**
+ * Runs `yarn cache clean [packageName]` in the Kibana repo directory.
+ * Omit `packageName` to wipe the entire yarn cache.
+ * Full output is streamed to the terminal.
+ */
+async function runYarnCacheClean(kibanaRepoPath: string, packageName?: string): Promise<void> {
+  const args =
+    packageName !== undefined ? ['cache', 'clean', packageName] : ['cache', 'clean'];
+  const label =
+    packageName !== undefined
+      ? `Cleaning yarn cache for ${packageName}`
+      : 'Cleaning full yarn cache';
+  await spawnProcess(YARN_CMD, args, kibanaRepoPath, process.env, label, {
+    passthroughOutput: true,
+  });
+}
+
+/**
  * Checks whether Kibana's Node dependencies are installed and, if not, runs
  * `yarn kbn bootstrap` in the repo root before any data-generation scripts.
  *
@@ -196,7 +228,13 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
  * data-generation scripts. If it is absent bootstrap is triggered and full
  * process output is streamed to the terminal.
  *
- * Throws a clear, actionable error if bootstrap fails so the caller can
+ * When bootstrap fails due to a yarn integrity-check error the function
+ * automatically cleans the affected package cache and retries. If a second
+ * integrity error is encountered the entire yarn cache is wiped before a
+ * final (third) attempt. Any non-integrity failure throws immediately without
+ * retrying. A maximum of three bootstrap attempts is ever made.
+ *
+ * Throws a clear, actionable error if all attempts fail so the caller can
  * surface it rather than receiving a cryptic "Cannot find module" from a
  * downstream script.
  */
@@ -218,23 +256,71 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
     "Kibana dependencies not found. Running yarn kbn bootstrap — this may take 20-40 minutes...",
   );
 
+  const runBootstrap = (): Promise<void> =>
+    spawnProcess(YARN_CMD, ['kbn', 'bootstrap'], resolvedRepoPath, process.env, 'Bootstrapping Kibana', {
+      passthroughOutput: true,
+    });
+
+  // Attempt 1
+  let bootstrapError: unknown;
   try {
-    await spawnProcess(
-      YARN_CMD,
-      ['kbn', 'bootstrap'],
-      resolvedRepoPath,
-      process.env,
-      'Bootstrapping Kibana',
-      { passthroughOutput: true },
-    );
+    await runBootstrap();
+    return;
   } catch (err) {
+    bootstrapError = err;
+  }
+
+  const firstMessage = getErrorMessage(bootstrapError);
+  const firstPackage = extractIntegrityPackage(firstMessage);
+
+  if (firstPackage === null) {
     throw new Error(
-      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${getErrorMessage(
-        err,
-      )}`,
-      { cause: err as Error },
+      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${firstMessage}`,
+      { cause: bootstrapError as Error },
     );
   }
+
+  // Integrity error on attempt 1 — clean the specific package cache and retry.
+  logger.info(`Yarn integrity error for ${firstPackage}. Cleaning package cache...`);
+  await runYarnCacheClean(resolvedRepoPath, firstPackage);
+
+  // Attempt 2
+  try {
+    await runBootstrap();
+    return;
+  } catch (err) {
+    bootstrapError = err;
+  }
+
+  const secondMessage = getErrorMessage(bootstrapError);
+  const secondPackage = extractIntegrityPackage(secondMessage);
+
+  if (secondPackage === null) {
+    throw new Error(
+      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${secondMessage}`,
+      { cause: bootstrapError as Error },
+    );
+  }
+
+  // Integrity error on attempt 2 — wipe the entire yarn cache and make a
+  // final attempt. Warn clearly because this affects all projects on the host.
+  logger.warn('Multiple integrity errors. Cleaning full yarn cache...');
+  logger.warn('Warning: clearing full yarn cache — this affects all projects on this machine');
+  await runYarnCacheClean(resolvedRepoPath);
+
+  // Attempt 3 (final)
+  try {
+    await runBootstrap();
+    return;
+  } catch (err) {
+    bootstrapError = err;
+  }
+
+  const finalMessage = getErrorMessage(bootstrapError);
+  throw new Error(
+    `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${finalMessage}`,
+    { cause: bootstrapError as Error },
+  );
 }
 
 /**

@@ -11,6 +11,7 @@ import { spawn } from 'child_process';
 import {
   detectKibanaScriptPaths,
   ensureKibanaBootstrapped,
+  extractIntegrityPackage,
   runGenerateEvents,
   runGenerateAttacks,
   runGenerateCases,
@@ -41,6 +42,9 @@ const CREDS: ElasticCredentials = {
   username: 'elastic',
   password: 'secret',
 };
+
+const INTEGRITY_PKG = 'lodash';
+const INTEGRITY_STDERR = `error https://registry.yarnpkg.com/${INTEGRITY_PKG}/-/${INTEGRITY_PKG}-4.17.21.tgz: Integrity check failed`;
 
 const NEW_PLUGIN_DIR = path.join(
   REPO_PATH,
@@ -167,6 +171,32 @@ describe('detectKibanaScriptPaths', () => {
 });
 
 // ---------------------------------------------------------------------------
+// extractIntegrityPackage
+// ---------------------------------------------------------------------------
+
+describe('extractIntegrityPackage', () => {
+  it('extracts an unscoped package name from an integrity error', () => {
+    const stderr =
+      'error https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz: Integrity check failed';
+    expect(extractIntegrityPackage(stderr)).toBe('lodash');
+  });
+
+  it('extracts a scoped package name from an integrity error', () => {
+    const stderr =
+      'error https://registry.yarnpkg.com/@kbn/test/-/@kbn/test-1.0.0.tgz: Integrity check failed';
+    expect(extractIntegrityPackage(stderr)).toBe('@kbn/test');
+  });
+
+  it('returns null for a non-integrity error message', () => {
+    expect(extractIntegrityPackage('error Command failed with exit code 1')).toBeNull();
+  });
+
+  it('returns null for an empty string', () => {
+    expect(extractIntegrityPackage('')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ensureKibanaBootstrapped
 // ---------------------------------------------------------------------------
 
@@ -229,6 +259,69 @@ describe('ensureKibanaBootstrapped', () => {
     await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow(
       'Underlying error: Process exited with code 1',
     );
+  });
+
+  it('cleans package cache and retries when an integrity error occurs', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    // Attempt 1: integrity error
+    mockSpawnWithStderrAndClose(INTEGRITY_STDERR, 1);
+    // yarn cache clean (package): success
+    mockSpawnAutoClose(0);
+    // Attempt 2: success
+    mockSpawnAutoClose(0);
+
+    await ensureKibanaBootstrapped(REPO_PATH);
+
+    expect(mockedSpawn).toHaveBeenCalledTimes(3);
+    // Second spawn must be yarn cache clean with the extracted package name
+    expect(mockedSpawn.mock.calls[1]?.[1]).toEqual(
+      expect.arrayContaining(['cache', 'clean', INTEGRITY_PKG]),
+    );
+  });
+
+  it('cleans full cache after two integrity errors and succeeds on final attempt', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    // Attempt 1: integrity error
+    mockSpawnWithStderrAndClose(INTEGRITY_STDERR, 1);
+    // yarn cache clean (package): success
+    mockSpawnAutoClose(0);
+    // Attempt 2: integrity error again
+    mockSpawnWithStderrAndClose(INTEGRITY_STDERR, 1);
+    // yarn cache clean (full): success
+    mockSpawnAutoClose(0);
+    // Attempt 3: success
+    mockSpawnAutoClose(0);
+
+    await ensureKibanaBootstrapped(REPO_PATH);
+
+    expect(mockedSpawn).toHaveBeenCalledTimes(5);
+    // Fourth spawn must be a full cache clean (no extra package arg)
+    expect(mockedSpawn.mock.calls[3]?.[1]).toEqual(['cache', 'clean']);
+  });
+
+  it('throws Bootstrap failed after all three attempts are exhausted', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    // Attempt 1: integrity error
+    mockSpawnWithStderrAndClose(INTEGRITY_STDERR, 1);
+    // yarn cache clean (package): success
+    mockSpawnAutoClose(0);
+    // Attempt 2: integrity error
+    mockSpawnWithStderrAndClose(INTEGRITY_STDERR, 1);
+    // yarn cache clean (full): success
+    mockSpawnAutoClose(0);
+    // Attempt 3: fails
+    mockSpawnAutoClose(1);
+
+    await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow('Bootstrap failed');
+    expect(mockedSpawn).toHaveBeenCalledTimes(5);
+  });
+
+  it('throws immediately on non-integrity failure without retrying', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    mockSpawnWithStderrAndClose('Connection refused to registry', 1);
+
+    await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow('Bootstrap failed');
+    expect(mockedSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('streams bootstrap stdout/stderr to terminal output', async () => {
