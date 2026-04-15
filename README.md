@@ -118,13 +118,14 @@ node dist/index.js auth logout
 
 ### `create`
 
-Starts the interactive five-step wizard:
+Starts the interactive wizard:
 
 1. **Deployment name and environment** — alphanumeric + hyphens, targeting prod / qa / staging
 2. **Region** — filtered to regions available in the selected environment
 3. **Stack version** — semver, defaults to `8.17.1`
 4. **Kibana spaces** — 1–10 spaces, names converted to hyphenated IDs
-5. **Sample data** — optionally generate Alerts + Attack Discoveries, Cases, and/or Events using scripts from a local Kibana repo
+5. **Sample data** — optionally select Alerts + Attack Discoveries, Cases, and/or Events
+6. **Kibana repo path (conditional)** — shown only when sample data is selected; leave empty to skip data generation
 
 ```bash
 node dist/index.js create
@@ -141,7 +142,7 @@ src/
     kibana.ts     — Kibana Spaces API and Security Solution initialization
   commands/
     auth.ts       — auth login / status / logout command handlers
-    create.ts     — create command; orchestrates all five steps
+    create.ts     — create command; orchestrates the wizard flow
   wizard/
     prompts.ts    — interactive inquirer prompts with inline validation
   runners/
@@ -149,7 +150,7 @@ src/
                     detects new vs. old plugin directory layout automatically;
                     passes credentials via environment variables, never CLI args
   config/
-    store.ts      — reads and writes API keys to ~/.config/security-env-setup/config.json
+    store.ts      — reads and writes API keys to ~/.security-env-setup/config.json
     endpoints.ts  — maps environment names to Elastic Cloud API base URLs
   utils/
     errors.ts     — normalises unknown thrown values to strings
