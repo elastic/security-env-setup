@@ -156,16 +156,17 @@ describe('detectKibanaScriptPaths', () => {
 // ---------------------------------------------------------------------------
 
 describe('ensureKibanaBootstrapped', () => {
+  const RESOLVED_REPO_PATH = path.resolve(REPO_PATH);
   const BOOTSTRAP_MARKER = path.join(REPO_PATH, 'node_modules', '@kbn', 'test-es-server');
 
   it('logs ready and does not spawn when marker directory exists', async () => {
-    mockedFs.existsSync.mockImplementation((p) => p === BOOTSTRAP_MARKER);
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH || p === BOOTSTRAP_MARKER);
     await ensureKibanaBootstrapped(REPO_PATH);
     expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
   it('spawns yarn kbn bootstrap at the repo root when marker is absent', async () => {
-    mockedFs.existsSync.mockReturnValue(false);
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
     mockSpawnAutoClose(0);
     await ensureKibanaBootstrapped(REPO_PATH);
     expect(mockedSpawn).toHaveBeenCalledWith(
@@ -176,13 +177,13 @@ describe('ensureKibanaBootstrapped', () => {
   });
 
   it('throws bootstrap-failed error when bootstrap process exits non-zero', async () => {
-    mockedFs.existsSync.mockReturnValue(false);
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
     mockSpawnAutoClose(1);
     await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow('Bootstrap failed');
   });
 
   it('throws bootstrap-failed error when yarn is not found (ENOENT)', async () => {
-    mockedFs.existsSync.mockReturnValue(false);
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
     const child = createMockChild();
     mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
     const promise = ensureKibanaBootstrapped(REPO_PATH);
@@ -192,10 +193,26 @@ describe('ensureKibanaBootstrapped', () => {
   });
 
   it('bootstrap-failed error includes actionable instructions', async () => {
-    mockedFs.existsSync.mockReturnValue(false);
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
     mockSpawnAutoClose(1);
     await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow(
       "run 'yarn kbn bootstrap' manually",
+    );
+  });
+
+  it('throws when kibanaRepoPath does not exist', async () => {
+    mockedFs.existsSync.mockReturnValue(false);
+    await expect(ensureKibanaBootstrapped('/nonexistent')).rejects.toThrow(
+      'Kibana repository not found',
+    );
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('bootstrap-failed error includes underlying error details', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
+    mockSpawnAutoClose(1);
+    await expect(ensureKibanaBootstrapped(REPO_PATH)).rejects.toThrow(
+      'Underlying error: Process exited with code 1',
     );
   });
 });
@@ -482,6 +499,9 @@ describe('runAllDataGeneration', () => {
       generateCases: false,
     });
     expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedFs.existsSync).not.toHaveBeenCalledWith(
+      path.join(path.resolve(REPO_PATH), 'node_modules', '@kbn', 'test-es-server'),
+    );
     expect(result.eventsRan).toBe(false);
     expect(result.alertsRan).toBe(false);
     expect(result.casesRan).toBe(false);

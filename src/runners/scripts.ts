@@ -176,7 +176,13 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
  * downstream script.
  */
 export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<void> {
-  const markerPath = path.join(kibanaRepoPath, 'node_modules', '@kbn', 'test-es-server');
+  const resolvedRepoPath = path.resolve(kibanaRepoPath);
+
+  if (!fs.existsSync(resolvedRepoPath)) {
+    throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
+  }
+
+  const markerPath = path.join(resolvedRepoPath, 'node_modules', '@kbn', 'test-es-server');
 
   if (fs.existsSync(markerPath)) {
     logger.success('Kibana dependencies ready.');
@@ -191,13 +197,16 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
     await spawnProcess(
       YARN_CMD,
       ['kbn', 'bootstrap'],
-      path.resolve(kibanaRepoPath),
+      resolvedRepoPath,
       process.env,
       'Bootstrapping Kibana',
     );
   } catch (err) {
     throw new Error(
-      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again.`,
+      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${getErrorMessage(
+        err,
+      )}`,
+      { cause: err as Error },
     );
   }
 }
@@ -318,8 +327,13 @@ export async function runAllDataGeneration(
     throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
   }
 
-  // Ensure dependencies are bootstrapped before running any script.
-  await ensureKibanaBootstrapped(options.kibanaRepoPath);
+  const hasRequestedGeneration =
+    options.generateEvents || options.generateAlerts || options.generateCases;
+
+  // Ensure dependencies are bootstrapped before running any selected script.
+  if (hasRequestedGeneration) {
+    await ensureKibanaBootstrapped(options.kibanaRepoPath);
+  }
 
   if (options.generateEvents) {
     try {
