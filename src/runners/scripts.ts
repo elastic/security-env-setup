@@ -9,6 +9,7 @@ import type {
   KibanaScriptPaths,
 } from '../types';
 import { getErrorMessage } from '../utils/errors';
+import logger from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,9 +69,11 @@ function spawnProcess(
   cwd: string,
   env: NodeJS.ProcessEnv,
   spinnerLabel: string,
+  options?: { passthroughOutput?: boolean },
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const spinner = ora(spinnerLabel).start();
+    const passthroughOutput = options?.passthroughOutput === true;
+    const spinner = passthroughOutput ? undefined : ora(spinnerLabel).start();
     const stderrChunks: string[] = [];
 
     const child = spawn(command, args, {
@@ -80,6 +83,7 @@ function spawnProcess(
     });
 
     const updateSpinner = (chunk: unknown): void => {
+      if (spinner === undefined) return;
       const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
       // Show only the last non-empty line to keep the spinner tidy.
       const lastLine = text.split('\n').reverse().find((l) => l.trim().length > 0) ?? '';
@@ -88,15 +92,29 @@ function spawnProcess(
       }
     };
 
-    child.stdout?.on('data', updateSpinner);
+    child.stdout?.on('data', (chunk: unknown) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      if (passthroughOutput) {
+        process.stdout.write(text);
+      } else {
+        updateSpinner(text);
+      }
+    });
+
     child.stderr?.on('data', (chunk: unknown) => {
       const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
       stderrChunks.push(text);
-      updateSpinner(chunk);
+      if (passthroughOutput) {
+        process.stderr.write(text);
+      } else {
+        updateSpinner(chunk);
+      }
     });
 
     child.on('error', (err: Error) => {
-      spinner.fail(`${spinnerLabel} — failed to start`);
+      if (spinner !== undefined) {
+        spinner.fail(`${spinnerLabel} — failed to start`);
+      }
       const message =
         'code' in err && (err as NodeJS.ErrnoException).code === 'ENOENT'
           ? `Command not found: "${command}". Make sure it is installed and on PATH.`
@@ -106,13 +124,21 @@ function spawnProcess(
 
     child.on('close', (code: number | null) => {
       if (code === 0) {
-        spinner.succeed(`${spinnerLabel} — done`);
+        if (spinner !== undefined) {
+          spinner.succeed(`${spinnerLabel} — done`);
+        } else {
+          logger.success(`${spinnerLabel} — done`);
+        }
         resolve();
       } else {
         const codeStr = code !== null ? String(code) : 'unknown';
         const stderr = stderrChunks.join('').trim();
         const detail = stderr.length > 0 ? `\nstderr:\n${stderr}` : '';
-        spinner.fail(`${spinnerLabel} — exited with code ${codeStr}`);
+        if (spinner !== undefined) {
+          spinner.fail(`${spinnerLabel} — exited with code ${codeStr}`);
+        } else {
+          logger.error(`${spinnerLabel} — exited with code ${codeStr}`);
+        }
         reject(new Error(`Process exited with code ${codeStr}${detail}`));
       }
     });
@@ -159,6 +185,56 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
     // testGenerate is the cwd from which `yarn test:generate` is invoked.
     testGenerate: scriptDir,
   };
+}
+
+/**
+ * Checks whether Kibana's Node dependencies are installed and, if not, runs
+ * `yarn kbn bootstrap` in the repo root before any data-generation scripts.
+ *
+ * Bootstrap is detected by the presence of `node_modules/@kbn/test-es-server`,
+ * a package that is only written during bootstrap and is required by the
+ * data-generation scripts. If it is absent bootstrap is triggered and full
+ * process output is streamed to the terminal.
+ *
+ * Throws a clear, actionable error if bootstrap fails so the caller can
+ * surface it rather than receiving a cryptic "Cannot find module" from a
+ * downstream script.
+ */
+export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<void> {
+  const resolvedRepoPath = path.resolve(kibanaRepoPath);
+
+  if (!fs.existsSync(resolvedRepoPath)) {
+    throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
+  }
+
+  const markerPath = path.join(resolvedRepoPath, 'node_modules', '@kbn', 'test-es-server');
+
+  if (fs.existsSync(markerPath)) {
+    logger.success('Kibana dependencies ready.');
+    return;
+  }
+
+  logger.warn(
+    "Kibana dependencies not found. Running yarn kbn bootstrap — this may take 20-40 minutes...",
+  );
+
+  try {
+    await spawnProcess(
+      YARN_CMD,
+      ['kbn', 'bootstrap'],
+      resolvedRepoPath,
+      process.env,
+      'Bootstrapping Kibana',
+      { passthroughOutput: true },
+    );
+  } catch (err) {
+    throw new Error(
+      `Bootstrap failed. Please run 'yarn kbn bootstrap' manually in your Kibana repo and try again. Underlying error: ${getErrorMessage(
+        err,
+      )}`,
+      { cause: err as Error },
+    );
+  }
 }
 
 /**
@@ -245,6 +321,15 @@ export async function runGenerateCases(
 }
 
 /**
+ * If `msg` contains "Cannot find module" it appends a bootstrap hint so the
+ * error surfaced to the user is immediately actionable.
+ */
+function enhanceModuleError(msg: string): string {
+  if (!msg.includes('Cannot find module')) return msg;
+  return `${msg}\nHint: Run 'yarn kbn bootstrap' in your Kibana repo and try again.`;
+}
+
+/**
  * Orchestrates all selected data-generation scripts sequentially.
  * Individual script failures are captured in `result.errors` and do not abort
  * the remaining scripts.
@@ -268,12 +353,21 @@ export async function runAllDataGeneration(
     throw new Error(`Kibana repository not found at: ${resolvedRepoPath}`);
   }
 
+  const hasRequestedGeneration =
+    options.generateEvents || options.generateAlerts || options.generateCases;
+
+  // Ensure dependencies are present before running any selected script.
+  // Individual runGenerate* functions already validate their required script paths.
+  if (hasRequestedGeneration) {
+    await ensureKibanaBootstrapped(options.kibanaRepoPath);
+  }
+
   if (options.generateEvents) {
     try {
       await runGenerateEvents(options.kibanaRepoPath, options.kibanaUrl, options.credentials);
       result.eventsRan = true;
     } catch (err) {
-      result.errors.push(`Events generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Events generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 
@@ -287,7 +381,7 @@ export async function runAllDataGeneration(
       );
       result.alertsRan = true;
     } catch (err) {
-      result.errors.push(`Alerts generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Alerts generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 
@@ -301,7 +395,7 @@ export async function runAllDataGeneration(
       );
       result.casesRan = true;
     } catch (err) {
-      result.errors.push(`Cases generation failed: ${getErrorMessage(err)}`);
+      result.errors.push(`Cases generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
     }
   }
 
