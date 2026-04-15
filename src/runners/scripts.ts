@@ -347,7 +347,12 @@ export async function runGenerateEvents(
   // Non-sensitive flags are passed as CLI args; the password is in the env.
   await spawnProcess(
     YARN_CMD,
-    ['test:generate', '--kibana', kibanaUrl, '--username', credentials.username],
+    [
+      'test:generate',
+      '--kibanaUrl', kibanaUrl,
+      '--elasticsearchUrl', credentials.url,
+      '--username', credentials.username,
+    ],
     testGenerate,
     env,
     'Generating events',
@@ -370,9 +375,14 @@ export async function runGenerateAttacks(
     throw new Error(`generate_cli.js not found at: ${generateCli}`);
   }
 
-  const args = ['--attacks', '--kibana', kibanaUrl, '--username', credentials.username];
+  const args = [
+    '--attacks',
+    '--kibanaUrl', kibanaUrl,
+    '--elasticsearchUrl', credentials.url,
+    '--username', credentials.username,
+  ];
   if (spaceId !== undefined && spaceId.trim().length > 0) {
-    args.push('--space', spaceId.trim());
+    args.push('--spaceId', spaceId.trim());
   }
 
   await spawnProcess(
@@ -400,9 +410,14 @@ export async function runGenerateCases(
     throw new Error(`generate_cli.js not found at: ${generateCli}`);
   }
 
-  const args = ['--cases', '--kibana', kibanaUrl, '--username', credentials.username];
+  const args = [
+    '--cases',
+    '--kibanaUrl', kibanaUrl,
+    '--elasticsearchUrl', credentials.url,
+    '--username', credentials.username,
+  ];
   if (spaceId !== undefined && spaceId.trim().length > 0) {
-    args.push('--space', spaceId.trim());
+    args.push('--spaceId', spaceId.trim());
   }
 
   await spawnProcess(

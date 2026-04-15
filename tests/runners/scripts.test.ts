@@ -371,7 +371,12 @@ describe('runGenerateEvents', () => {
 
     expect(mockedSpawn).toHaveBeenCalledWith(
       expect.stringMatching(/yarn/),
-      expect.arrayContaining(['test:generate', '--kibana', KIBANA_URL, '--username', 'elastic']),
+      expect.arrayContaining([
+        'test:generate',
+        '--kibanaUrl', KIBANA_URL,
+        '--elasticsearchUrl', CREDS.url,
+        '--username', 'elastic',
+      ]),
       expect.objectContaining({ cwd: NEW_PLUGIN_DIR }),
     );
   });
@@ -498,29 +503,31 @@ describe('runGenerateAttacks', () => {
 
     const args = [...mockedSpawn.mock.calls[0][1]];
     expect(args).toContain('--attacks');
-    expect(args).toContain('--kibana');
+    expect(args).toContain('--kibanaUrl');
     expect(args).toContain(KIBANA_URL);
+    expect(args).toContain('--elasticsearchUrl');
+    expect(args).toContain(CREDS.url);
   });
 
-  it('appends --space flag when spaceId is provided', async () => {
+  it('appends --spaceId flag when spaceId is provided', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, 'security');
     child.emit('close', 0, null);
     await promise;
 
     const args = [...mockedSpawn.mock.calls[0][1]];
-    expect(args).toContain('--space');
+    expect(args).toContain('--spaceId');
     expect(args).toContain('security');
   });
 
-  it('does not append --space when spaceId is empty string', async () => {
+  it('does not append --spaceId when spaceId is empty string', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, '');
     child.emit('close', 0, null);
     await promise;
 
     const args = [...mockedSpawn.mock.calls[0][1]];
-    expect(args).not.toContain('--space');
+    expect(args).not.toContain('--spaceId');
   });
 
   it('throws when generate_cli.js does not exist', async () => {
@@ -558,14 +565,14 @@ describe('runGenerateCases', () => {
     expect(args).toContain('--cases');
   });
 
-  it('appends --space flag when spaceId is provided', async () => {
+  it('appends --spaceId flag when spaceId is provided', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, 'my-space');
     child.emit('close', 0, null);
     await promise;
 
     const args = [...mockedSpawn.mock.calls[0][1]];
-    expect(args).toContain('--space');
+    expect(args).toContain('--spaceId');
     expect(args).toContain('my-space');
   });
 
