@@ -20,6 +20,9 @@ import type { ElasticCredentials } from '@types-local/index';
 
 const mockedFs = fs as jest.Mocked<typeof fs>;
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
+let consoleLogSpy: jest.SpyInstance;
+let consoleWarnSpy: jest.SpyInstance;
+let consoleErrorSpy: jest.SpyInstance;
 
 const mockSpinner = {
   start: jest.fn().mockReturnThis(),
@@ -100,12 +103,24 @@ function mockSpawnWithStderrAndClose(stderrText: string, code = 1): void {
   });
 }
 
+beforeAll(() => {
+  consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockSpinner.start.mockReturnThis();
   mockSpinner.succeed.mockReturnThis();
   mockSpinner.fail.mockReturnThis();
   mockedFs.existsSync.mockReturnValue(false);
+});
+
+afterAll(() => {
+  consoleLogSpy.mockRestore();
+  consoleWarnSpy.mockRestore();
+  consoleErrorSpy.mockRestore();
 });
 
 // ---------------------------------------------------------------------------
