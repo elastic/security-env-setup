@@ -271,8 +271,7 @@ describe('listAvailableRegions', () => {
   it('returns a copy so callers cannot mutate shared region lists', async () => {
     const regions = await listAvailableRegions('qa');
     expect(regions).toEqual(REGIONS.qa);
-    (regions as string[]).push('fake-region');
-    expect(REGIONS.qa).not.toContain('fake-region');
+    expect(regions).not.toBe(REGIONS.qa);
   });
 });
 
