@@ -56,6 +56,15 @@ const NEW_PLUGIN_DIR = path.join(
 );
 const OLD_PLUGIN_DIR = path.join(REPO_PATH, 'x-pack', 'plugins', 'security_solution');
 
+const NEW_CASES_SCRIPT = path.join(
+  REPO_PATH,
+  'x-pack', 'platform', 'plugins', 'shared', 'cases', 'scripts', 'generate_cases.js',
+);
+const OLD_CASES_SCRIPT = path.join(
+  REPO_PATH,
+  'x-pack', 'plugins', 'cases', 'scripts', 'generate_cases.js',
+);
+
 // Creates a mock child process with stdout/stderr streams and event emitter.
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
@@ -148,6 +157,22 @@ describe('detectKibanaScriptPaths', () => {
     });
     const paths = detectKibanaScriptPaths(REPO_PATH);
     expect(paths.scriptDir).toBe(OLD_PLUGIN_DIR);
+  });
+
+  it('returns the new cases script path when it exists', () => {
+    mockedFs.existsSync.mockImplementation((p) => {
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
+    });
+    const paths = detectKibanaScriptPaths(REPO_PATH);
+    expect(paths.generateCasesScript).toBe(NEW_CASES_SCRIPT);
+  });
+
+  it('falls back to old cases script path when new does not exist', () => {
+    mockedFs.existsSync.mockImplementation((p) => {
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR;
+    });
+    const paths = detectKibanaScriptPaths(REPO_PATH);
+    expect(paths.generateCasesScript).toBe(OLD_CASES_SCRIPT);
   });
 
   it('throws with both candidate paths when neither exists', () => {
@@ -363,7 +388,7 @@ describe('runGenerateEvents', () => {
     });
   });
 
-  it('spawns the correct yarn command in the plugin directory', async () => {
+  it('spawns yarn test:generate in the plugin directory with no extra flags', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
@@ -371,17 +396,12 @@ describe('runGenerateEvents', () => {
 
     expect(mockedSpawn).toHaveBeenCalledWith(
       expect.stringMatching(/yarn/),
-      expect.arrayContaining([
-        'test:generate',
-        '--kibanaUrl', KIBANA_URL,
-        '--elasticsearchUrl', CREDS.url,
-        '--username', 'elastic',
-      ]),
+      ['test:generate'],
       expect.objectContaining({ cwd: NEW_PLUGIN_DIR }),
     );
   });
 
-  it('passes password via environment variable, not as CLI arg', async () => {
+  it('passes credentials via environment variables, not as CLI args', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
@@ -389,24 +409,27 @@ describe('runGenerateEvents', () => {
 
     const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
     expect(spawnOptions.env['ELASTICSEARCH_PASSWORD']).toBe('secret');
+    expect(spawnOptions.env['KIBANA_URL']).toBe(KIBANA_URL);
     const spawnArgs = [...mockedSpawn.mock.calls[0][1]];
     expect(spawnArgs).not.toContain('secret');
+    expect(spawnArgs).not.toContain('elastic');
   });
 
-  it('succeeds the spinner on exit code 0', async () => {
+  it('resolves on exit code 0', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
-    await promise;
-    expect(mockSpinner.succeed).toHaveBeenCalled();
+    await expect(promise).resolves.toBeUndefined();
+    // passthroughOutput mode: spinner is never used
+    expect(mockSpinner.succeed).not.toHaveBeenCalled();
   });
 
-  it('rejects and fails spinner on non-zero exit code', async () => {
+  it('rejects on non-zero exit code', async () => {
     const { child, code } = mockSpawnFailure(2);
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', code, null);
     await expect(promise).rejects.toThrow('Process exited with code 2');
-    expect(mockSpinner.fail).toHaveBeenCalled();
+    expect(mockSpinner.fail).not.toHaveBeenCalled();
   });
 
   it('rejects with ENOENT message when command is not found', async () => {
@@ -427,39 +450,34 @@ describe('runGenerateEvents', () => {
     await expect(promise).rejects.toThrow('stderr');
   });
 
-  it('updates spinner text with last stdout line', async () => {
+  it('streams stdout to the terminal (passthroughOutput)', async () => {
     const child = createMockChild();
     mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
-    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-    child.stdout.emit('data', Buffer.from('line 1\nline 2\n'));
-    child.emit('close', 0, null);
-    await promise;
-    // After receiving data, spinner text should have been updated
-    expect(mockSpinner.text).toBeDefined();
+    const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.stdout.emit('data', Buffer.from('line 1\nline 2\n'));
+      child.emit('close', 0, null);
+      await promise;
+      expect(stdoutSpy).toHaveBeenCalledWith('line 1\nline 2\n');
+    } finally {
+      stdoutSpy.mockRestore();
+    }
   });
 
-  it('handles non-Buffer stdout chunk (string path)', async () => {
+  it('streams non-Buffer stdout chunks to the terminal', async () => {
     const child = createMockChild();
     mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
-    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-    // Emit a plain string instead of a Buffer to exercise String(chunk) branch
-    child.stdout.emit('data', 'plain string output');
-    child.emit('close', 0, null);
-    await promise;
-    expect(mockSpinner.text).toContain('plain string output');
-  });
-
-  it('does not update spinner text when chunk contains only empty lines', async () => {
-    const child = createMockChild();
-    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
-    const initialText = mockSpinner.text;
-    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-    // All whitespace — find() returns undefined, ?? '' gives '', if condition is false
-    child.stdout.emit('data', Buffer.from('\n\n   \n'));
-    child.emit('close', 0, null);
-    await promise;
-    // spinner.text should not have been updated from the empty chunk
-    expect(mockSpinner.text).toBe(initialText);
+    const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.stdout.emit('data', 'plain string output');
+      child.emit('close', 0, null);
+      await promise;
+      expect(stdoutSpy).toHaveBeenCalledWith('plain string output');
+    } finally {
+      stdoutSpy.mockRestore();
+    }
   });
 
   it('rejects with "unknown" when close event fires with null exit code', async () => {
@@ -550,38 +568,68 @@ describe('runGenerateCases', () => {
       return (
         p === REPO_PATH ||
         p === NEW_PLUGIN_DIR ||
-        (typeof p === 'string' && p.includes('generate_cli.js'))
+        (typeof p === 'string' && p.includes('generate_cases.js'))
       );
     });
   });
 
-  it('spawns node with --cases flag', async () => {
+  it('spawns node with generate_cases.js and --kibana flag', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
     await promise;
 
     const args = [...mockedSpawn.mock.calls[0][1]];
-    expect(args).toContain('--cases');
+    // First arg is the script path
+    expect(args[0]).toContain('generate_cases.js');
+    expect(args).toContain('--kibana');
+    expect(args).toContain(KIBANA_URL);
+    expect(args).toContain('--username');
+    expect(args).toContain('elastic');
   });
 
-  it('appends --spaceId flag when spaceId is provided', async () => {
+  it('passes --password as a CLI arg (script does not support env var auth)', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).toContain('--password');
+    expect(args).toContain(CREDS.password);
+    // Must NOT use --kibanaUrl or --elasticsearchUrl
+    expect(args).not.toContain('--kibanaUrl');
+    expect(args).not.toContain('--elasticsearchUrl');
+  });
+
+  it('appends --space flag when spaceId is provided', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, 'my-space');
     child.emit('close', 0, null);
     await promise;
 
     const args = [...mockedSpawn.mock.calls[0][1]];
-    expect(args).toContain('--spaceId');
+    expect(args).toContain('--space');
     expect(args).toContain('my-space');
+    expect(args).not.toContain('--spaceId');
   });
 
-  it('throws when generate_cli.js does not exist', async () => {
+  it('does not append --space when spaceId is empty string', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, '');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).not.toContain('--space');
+  });
+
+  it('throws when generate_cases.js does not exist', async () => {
     mockedFs.existsSync.mockImplementation((p) => {
       return p === REPO_PATH || p === NEW_PLUGIN_DIR;
     });
     await expect(runGenerateCases(REPO_PATH, KIBANA_URL, CREDS)).rejects.toThrow(
-      'generate_cli.js not found',
+      'generate_cases.js not found',
     );
   });
 });
@@ -608,6 +656,7 @@ describe('runAllDataGeneration', () => {
         p === path.resolve(REPO_PATH) ||
         p === NEW_PLUGIN_DIR ||
         (typeof p === 'string' && p.includes('generate_cli.js')) ||
+        (typeof p === 'string' && p.includes('generate_cases.js')) ||
         // Bootstrap marker — present so ensureKibanaBootstrapped skips bootstrap
         // unless a test overrides this mock behavior.
         p === BOOTSTRAP_MARKER
