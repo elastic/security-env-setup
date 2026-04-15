@@ -1,7 +1,7 @@
 import fs from 'fs';
 import * as inquirer from 'inquirer';
 import type { DeploymentConfig, Environment, KibanaSpace } from '../types';
-import { REGIONS } from '../api/cloud';
+import { REGIONS } from '../regions';
 
 // ---------------------------------------------------------------------------
 // Constants

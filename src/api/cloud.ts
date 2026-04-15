@@ -7,6 +7,7 @@ import { retry } from '../utils/retry';
 import logger from '../utils/logger';
 import { buildHeaders } from '../utils/http';
 import { getErrorMessage } from '../utils/errors';
+import { REGIONS } from '../regions';
 
 // ---------------------------------------------------------------------------
 // Internal API response types — never exported
@@ -43,7 +44,7 @@ interface DeploymentGetResponse {
 interface CreateDeploymentApiResource {
   kind: string;
   ref_id?: string;
-  credentials?: { username?: string; password?: string };
+  credentials?: { username?: string; password?: string } | null;
 }
 
 /** Shape returned by POST /api/v1/deployments */
@@ -59,33 +60,11 @@ interface ListDeploymentsApiResponse {
   deployments?: DeploymentGetResponse[];
 }
 
-// ---------------------------------------------------------------------------
-// Available regions — exported so the wizard can drive its region list
-// ---------------------------------------------------------------------------
-
-export const REGIONS: Record<Environment, string[]> = {
-  prod: [
-    'gcp-us-central1',
-    'gcp-us-east4',
-    'gcp-us-west1',
-    'gcp-us-west2',
-    'gcp-europe-west1',
-    'gcp-europe-west2',
-    'gcp-europe-west3',
-    'aws-us-east-1',
-    'aws-us-west-2',
-    'aws-eu-west-1',
-    'aws-eu-central-1',
-    'azure-eastus2',
-    'azure-westeurope',
-  ],
-  qa: ['gcp-us-central1', 'gcp-us-west2'],
-  staging: ['gcp-us-central1', 'gcp-europe-west1'],
-};
+export { REGIONS } from '../regions';
 
 /** Returns the list of available regions for the given environment. */
 export function listAvailableRegions(env: Environment): Promise<string[]> {
-  return Promise.resolve(REGIONS[env]);
+  return Promise.resolve([...REGIONS[env]]);
 }
 
 // ---------------------------------------------------------------------------

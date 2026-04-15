@@ -267,6 +267,12 @@ describe('listAvailableRegions', () => {
     const regions = await listAvailableRegions('staging');
     expect(regions).toEqual(REGIONS.staging);
   });
+
+  it('returns a copy so callers cannot mutate shared region lists', async () => {
+    const regions = await listAvailableRegions('qa');
+    regions.push('fake-region');
+    expect(REGIONS.qa).not.toContain('fake-region');
+  });
 });
 
 // ---------------------------------------------------------------------------
