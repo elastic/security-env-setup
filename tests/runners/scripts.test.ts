@@ -157,7 +157,7 @@ describe('detectKibanaScriptPaths', () => {
 
 describe('ensureKibanaBootstrapped', () => {
   const RESOLVED_REPO_PATH = path.resolve(REPO_PATH);
-  const BOOTSTRAP_MARKER = path.join(REPO_PATH, 'node_modules', '@kbn', 'test-es-server');
+  const BOOTSTRAP_MARKER = path.join(RESOLVED_REPO_PATH, 'node_modules', '@kbn', 'test-es-server');
 
   it('logs ready and does not spawn when marker directory exists', async () => {
     mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH || p === BOOTSTRAP_MARKER);
@@ -457,6 +457,7 @@ describe('runAllDataGeneration', () => {
     generateCases: false,
     generateEvents: false,
   };
+  const BOOTSTRAP_MARKER = path.join(path.resolve(REPO_PATH), 'node_modules', '@kbn', 'test-es-server');
 
   beforeEach(() => {
     mockedFs.existsSync.mockImplementation((p) => {
@@ -499,9 +500,7 @@ describe('runAllDataGeneration', () => {
       generateCases: false,
     });
     expect(mockedSpawn).not.toHaveBeenCalled();
-    expect(mockedFs.existsSync).not.toHaveBeenCalledWith(
-      path.join(path.resolve(REPO_PATH), 'node_modules', '@kbn', 'test-es-server'),
-    );
+    expect(mockedFs.existsSync).not.toHaveBeenCalledWith(BOOTSTRAP_MARKER);
     expect(result.eventsRan).toBe(false);
     expect(result.alertsRan).toBe(false);
     expect(result.casesRan).toBe(false);
