@@ -97,7 +97,7 @@ function spawnProcess(
       if (passthroughOutput) {
         process.stdout.write(text);
       } else {
-        updateSpinner(chunk);
+        updateSpinner(text);
       }
     });
 

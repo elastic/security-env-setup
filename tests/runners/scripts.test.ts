@@ -220,8 +220,8 @@ describe('ensureKibanaBootstrapped', () => {
     mockedFs.existsSync.mockImplementation((p) => p === RESOLVED_REPO_PATH);
     const child = createMockChild();
     mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
-    const stdoutSpy = jest.spyOn(process.stdout, 'write').mockReturnValue(true);
-    const stderrSpy = jest.spyOn(process.stderr, 'write').mockReturnValue(true);
+    const stdoutSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderrSpy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       const promise = ensureKibanaBootstrapped(REPO_PATH);
       child.stdout.emit('data', Buffer.from('bootstrap stdout\n'));
