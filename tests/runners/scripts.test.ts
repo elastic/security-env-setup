@@ -143,7 +143,7 @@ afterAll(() => {
 describe('detectKibanaScriptPaths', () => {
   it('detects the new plugin path when it exists', () => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === NEW_PLUGIN_DIR;
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
     });
     const paths = detectKibanaScriptPaths(REPO_PATH);
     expect(paths.scriptDir).toBe(NEW_PLUGIN_DIR);
@@ -153,7 +153,7 @@ describe('detectKibanaScriptPaths', () => {
 
   it('falls back to old plugin path when new does not exist', () => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === OLD_PLUGIN_DIR;
+      return p === REPO_PATH || p === OLD_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
     });
     const paths = detectKibanaScriptPaths(REPO_PATH);
     expect(paths.scriptDir).toBe(OLD_PLUGIN_DIR);
@@ -169,7 +169,7 @@ describe('detectKibanaScriptPaths', () => {
 
   it('falls back to old cases script path when new does not exist', () => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === NEW_PLUGIN_DIR;
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === OLD_CASES_SCRIPT;
     });
     const paths = detectKibanaScriptPaths(REPO_PATH);
     expect(paths.generateCasesScript).toBe(OLD_CASES_SCRIPT);
@@ -190,7 +190,7 @@ describe('detectKibanaScriptPaths', () => {
   });
 
   it('includes both candidate paths in the error message', () => {
-    mockedFs.existsSync.mockImplementation((p) => p === REPO_PATH);
+    mockedFs.existsSync.mockImplementation((p) => p === REPO_PATH || p === NEW_PLUGIN_DIR);
     expect(() => detectKibanaScriptPaths(REPO_PATH)).toThrow(/\(new\).*\(old\)/s);
   });
 });
@@ -384,7 +384,7 @@ describe('ensureKibanaBootstrapped', () => {
 describe('runGenerateEvents', () => {
   beforeEach(() => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === NEW_PLUGIN_DIR;
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
     });
   });
 
@@ -508,6 +508,7 @@ describe('runGenerateAttacks', () => {
       return (
         p === REPO_PATH ||
         p === NEW_PLUGIN_DIR ||
+        p === NEW_CASES_SCRIPT ||
         (typeof p === 'string' && p.includes('generate_cli.js'))
       );
     });
@@ -550,7 +551,7 @@ describe('runGenerateAttacks', () => {
 
   it('throws when generate_cli.js does not exist', async () => {
     mockedFs.existsSync.mockImplementation((p) => {
-      return p === REPO_PATH || p === NEW_PLUGIN_DIR;
+      return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
     });
     await expect(runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS)).rejects.toThrow(
       'generate_cli.js not found',
@@ -588,7 +589,7 @@ describe('runGenerateCases', () => {
     expect(args).toContain('elastic');
   });
 
-  it('passes --password as a CLI arg (script does not support env var auth)', async () => {
+  it('passes --password as a CLI arg', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
@@ -600,6 +601,17 @@ describe('runGenerateCases', () => {
     // Must NOT use --kibanaUrl or --elasticsearchUrl
     expect(args).not.toContain('--kibanaUrl');
     expect(args).not.toContain('--elasticsearchUrl');
+  });
+
+  it('warns that --password can be visible in process listings', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Passing Elasticsearch password via --password'),
+    );
   });
 
   it('appends --space flag when spaceId is provided', async () => {
@@ -624,12 +636,12 @@ describe('runGenerateCases', () => {
     expect(args).not.toContain('--space');
   });
 
-  it('throws when generate_cases.js does not exist', async () => {
+  it('throws when neither generate_cases.js candidate path exists', async () => {
     mockedFs.existsSync.mockImplementation((p) => {
       return p === REPO_PATH || p === NEW_PLUGIN_DIR;
     });
     await expect(runGenerateCases(REPO_PATH, KIBANA_URL, CREDS)).rejects.toThrow(
-      'generate_cases.js not found',
+      'Could not find generate cases script inside',
     );
   });
 });

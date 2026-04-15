@@ -192,7 +192,17 @@ export function detectKibanaScriptPaths(kibanaRepoPath: string): KibanaScriptPat
 
   const newCasesScript = path.join(resolvedRepoPath, NEW_CASES_SCRIPT_REL);
   const oldCasesScript = path.join(resolvedRepoPath, OLD_CASES_SCRIPT_REL);
-  const generateCasesScript = fs.existsSync(newCasesScript) ? newCasesScript : oldCasesScript;
+  let generateCasesScript: string;
+  if (fs.existsSync(newCasesScript)) {
+    generateCasesScript = newCasesScript;
+  } else if (fs.existsSync(oldCasesScript)) {
+    generateCasesScript = oldCasesScript;
+  } else {
+    throw new Error(
+      `Could not find generate cases script inside "${resolvedRepoPath}".\n` +
+        `Looked for:\n  (new) ${newCasesScript}\n  (old) ${oldCasesScript}`,
+    );
+  }
 
   return {
     scriptDir,
@@ -410,8 +420,7 @@ export async function runGenerateAttacks(
 /**
  * Runs `node generate_cases.js` from the cases plugin to create sample case
  * data. This script uses `--kibana` and `--space` (not the generate_cli.js
- * convention) and requires `--password` as a CLI flag because it does not
- * read credentials from environment variables.
+ * convention).
  */
 export async function runGenerateCases(
   kibanaRepoPath: string,
@@ -424,6 +433,10 @@ export async function runGenerateCases(
   if (!fs.existsSync(generateCasesScript)) {
     throw new Error(`generate_cases.js not found at: ${generateCasesScript}`);
   }
+
+  logger.warn(
+    'Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.',
+  );
 
   const args = [
     '--kibana', kibanaUrl,
