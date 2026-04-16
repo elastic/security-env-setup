@@ -360,13 +360,22 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
 /**
  * Embeds `username:password` into a URL's authority component so it can be
  * passed to scripts that require credentials in the URL rather than as
- * separate flags.  Both components are percent-encoded to handle special chars.
+ * separate flags. Existing embedded credentials are overwritten safely.
  */
 function embedCredentialsInUrl(url: string, username: string, password: string): string {
-  return url.replace(
-    /^(https?:\/\/)/,
-    `$1${encodeURIComponent(username)}:${encodeURIComponent(password)}@`,
-  );
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error(`Unsupported URL protocol: ${parsedUrl.protocol}`);
+    }
+    parsedUrl.username = username;
+    parsedUrl.password = password;
+    return parsedUrl.toString();
+  } catch (error) {
+    throw new Error(
+      `Invalid HTTP(S) URL for embedding credentials: ${url}. ${getErrorMessage(error)}`,
+    );
+  }
 }
 
 /**
@@ -376,7 +385,6 @@ function embedCredentialsInUrl(url: string, username: string, password: string):
  * The script's interface requires credentials to be embedded directly in the
  * `--node` and `--kibana` URL flags (e.g. `https://user:pass@host`).  There is
  * no environment-variable alternative, so this is the only way to pass auth.
- * NODE_TLS_REJECT_UNAUTHORIZED=0 is also required for remote SSL endpoints.
  */
 export async function runGenerateEvents(
   kibanaRepoPath: string,
@@ -404,7 +412,10 @@ export async function runGenerateEvents(
   );
 
   const args = ['test:generate', '--node', esUrlWithCreds, '--kibana', kibanaUrlWithCreds];
-  const env = { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '0' };
+  const env = { ...process.env };
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
+    env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  }
 
   await spawnProcess(YARN_CMD, args, scriptDir, env, 'Generating events', {
     passthroughOutput: true,

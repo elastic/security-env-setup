@@ -417,14 +417,76 @@ describe('runGenerateEvents', () => {
     expect(kibanaArg).toContain('kb.example.com');
   });
 
-  it('sets NODE_TLS_REJECT_UNAUTHORIZED=0 in the environment', async () => {
+  it('overwrites existing credentials in --node and --kibana URLs', async () => {
     const child = mockSpawnSuccess();
-    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+    const credsWithEmbeddedAuth: ElasticCredentials = {
+      ...CREDS,
+      url: 'https://old-user:old-pass@es.example.com:9243',
+    };
+    const promise = runGenerateEvents(
+      REPO_PATH,
+      'https://old-user:old-pass@kb.example.com:9243',
+      credsWithEmbeddedAuth,
+    );
     child.emit('close', 0, null);
     await promise;
 
-    const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
-    expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+
+    expect(nodeArg).toContain('elastic:secret@');
+    expect(nodeArg).not.toContain('old-user:old-pass@');
+    expect(kibanaArg).toContain('elastic:secret@');
+    expect(kibanaArg).not.toContain('old-user:old-pass@');
+  });
+
+  it('throws a clear error when the input URL is invalid', async () => {
+    await expect(runGenerateEvents(REPO_PATH, 'not-a-url', CREDS)).rejects.toThrow(
+      'Invalid HTTP(S) URL for embedding credentials',
+    );
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('sets NODE_TLS_REJECT_UNAUTHORIZED=0 when unset in the environment', async () => {
+    const child = mockSpawnSuccess();
+    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.emit('close', 0, null);
+      await promise;
+
+      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
+    } finally {
+      if (originalTlsSetting === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
+      }
+    }
+  });
+
+  it('preserves NODE_TLS_REJECT_UNAUTHORIZED when already set', async () => {
+    const child = mockSpawnSuccess();
+    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
+
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.emit('close', 0, null);
+      await promise;
+
+      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('1');
+    } finally {
+      if (originalTlsSetting === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
+      }
+    }
   });
 
   it('warns that credentials will be visible in process listings', async () => {
