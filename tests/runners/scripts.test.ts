@@ -599,7 +599,7 @@ describe('runGenerateAttacks', () => {
     });
   });
 
-  it('spawns node with --attacks flag', async () => {
+  it('spawns node with --attacks flag and passes --password as CLI arg', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
@@ -611,9 +611,22 @@ describe('runGenerateAttacks', () => {
     expect(args).toContain(KIBANA_URL);
     expect(args).toContain('--elasticsearchUrl');
     expect(args).toContain(CREDS.url);
+    expect(args).toContain('--password');
+    expect(args).toContain(CREDS.password);
   });
 
-  it('appends --spaceId flag when spaceId is provided', async () => {
+  it('warns that --password can be visible in process listings', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--password to generate_cli.js'),
+    );
+  });
+
+  it('appends --spaceId flag when spaceId is a non-default ID', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, 'security');
     child.emit('close', 0, null);
@@ -632,6 +645,17 @@ describe('runGenerateAttacks', () => {
 
     const args = [...mockedSpawn.mock.calls[0][1]];
     expect(args).not.toContain('--spaceId');
+  });
+
+  it('does not append --spaceId when spaceId is "default"', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, 'default');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).not.toContain('--spaceId');
+    expect(args).not.toContain('default');
   });
 
   it('throws when generate_cli.js does not exist', async () => {
@@ -710,7 +734,7 @@ describe('runGenerateCases', () => {
     expect(consoleWarnSpy).not.toHaveBeenCalled();
   });
 
-  it('appends --space flag when spaceId is provided', async () => {
+  it('appends --space flag when spaceId is a non-default ID', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, 'my-space');
     child.emit('close', 0, null);
@@ -720,6 +744,17 @@ describe('runGenerateCases', () => {
     expect(args).toContain('--space');
     expect(args).toContain('my-space');
     expect(args).not.toContain('--spaceId');
+  });
+
+  it('does not append --space when spaceId is "default"', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, 'default');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).not.toContain('--space');
+    expect(args).not.toContain('default');
   });
 
   it('does not append --space when spaceId is empty string', async () => {
