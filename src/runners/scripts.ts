@@ -358,6 +358,15 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
 }
 
 /**
+ * Replaces port :443 with :9243 in a URL string.
+ * yarn test:generate requires port 9243 for both Elasticsearch and Kibana,
+ * but the Cloud API may return port 443 (standard HTTPS) for some deployments.
+ */
+function normalizePort(url: string): string {
+  return url.replace(/:443$/, ':9243').replace(/:443\//, ':9243/');
+}
+
+/**
  * Embeds `username:password` into a URL's authority component so it can be
  * passed to scripts that require credentials in the URL rather than as
  * separate flags. Existing embedded credentials are overwritten safely.
@@ -401,12 +410,12 @@ export async function runGenerateEvents(
   );
 
   const esUrlWithCreds = embedCredentialsInUrl(
-    credentials.url,
+    normalizePort(credentials.url),
     credentials.username,
     credentials.password,
   );
   const kibanaUrlWithCreds = embedCredentialsInUrl(
-    kibanaUrl,
+    normalizePort(kibanaUrl),
     credentials.username,
     credentials.password,
   );

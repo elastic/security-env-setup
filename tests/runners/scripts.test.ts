@@ -489,6 +489,45 @@ describe('runGenerateEvents', () => {
     }
   });
 
+  it('normalizes port :443 to :9243 in the --node URL', async () => {
+    const child = mockSpawnSuccess();
+    const credsWith443 = { ...CREDS, url: 'https://es.example.com:443' };
+    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, credsWith443);
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    expect(nodeArg).toContain(':9243');
+    expect(nodeArg).not.toContain(':443');
+  });
+
+  it('normalizes port :443 to :9243 in the --kibana URL', async () => {
+    const child = mockSpawnSuccess();
+    const kibanaWith443 = 'https://kb.example.com:443';
+    const promise = runGenerateEvents(REPO_PATH, kibanaWith443, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+    expect(kibanaArg).toContain(':9243');
+    expect(kibanaArg).not.toContain(':443');
+  });
+
+  it('leaves port :9243 unchanged in both URLs', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+    expect(nodeArg).toContain(':9243');
+    expect(kibanaArg).toContain(':9243');
+  });
+
   it('warns that credentials will be visible in process listings', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
