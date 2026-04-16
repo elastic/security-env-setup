@@ -449,13 +449,24 @@ describe('runGenerateEvents', () => {
   });
 
   it('does not set NODE_TLS_REJECT_UNAUTHORIZED in the environment', async () => {
-    const child = mockSpawnSuccess();
-    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-    child.emit('close', 0, null);
-    await promise;
+    const originalNodeTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-    const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
-    expect(spawnOptions.env).not.toHaveProperty('NODE_TLS_REJECT_UNAUTHORIZED');
+    try {
+      const child = mockSpawnSuccess();
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.emit('close', 0, null);
+      await promise;
+
+      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+      expect(spawnOptions.env).not.toHaveProperty('NODE_TLS_REJECT_UNAUTHORIZED');
+    } finally {
+      if (originalNodeTls === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalNodeTls;
+      }
+    }
   });
 
   it('normalizes port :443 to :9243 in the --node URL', async () => {

@@ -361,9 +361,8 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
  * Normalises a Cloud endpoint URL for yarn test:generate:
  * - Replaces port :443 (with optional trailing slash) with :9243.
  * - Strips any remaining trailing slash.
- * Elastic Cloud uses valid SSL certificates, so NODE_TLS_REJECT_UNAUTHORIZED
- * is not needed and must not be set (the script refuses to run when it detects
- * that flag).
+ * Elastic Cloud uses valid SSL certificates, so this tool does not need to
+ * force-set NODE_TLS_REJECT_UNAUTHORIZED for the downstream script.
  */
 function normalizeUrl(url: string): string {
   return url.replace(/:443(\/?)$/, ':9243').replace(/\/$/, '');
@@ -423,8 +422,10 @@ export async function runGenerateEvents(
   );
 
   const args = ['test:generate', '--node', esUrlWithCreds, '--kibana', kibanaUrlWithCreds];
+  const env = { ...process.env };
+  delete env.NODE_TLS_REJECT_UNAUTHORIZED;
 
-  await spawnProcess(YARN_CMD, args, scriptDir, process.env, 'Generating events', {
+  await spawnProcess(YARN_CMD, args, scriptDir, env, 'Generating events', {
     passthroughOutput: true,
   });
 }
