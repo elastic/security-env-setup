@@ -460,9 +460,10 @@ export async function runGenerateAttacks(
     '--username', credentials.username,
     '--password', credentials.password,
   ];
+  const trimmedSpaceId = spaceId?.trim();
   // Skip --spaceId for the default space — the script already targets it by default.
-  if (spaceId !== undefined && spaceId.trim().length > 0 && spaceId.trim() !== 'default') {
-    args.push('--spaceId', spaceId.trim());
+  if (trimmedSpaceId && trimmedSpaceId !== 'default') {
+    args.push('--spaceId', trimmedSpaceId);
   }
 
   await spawnProcess(

@@ -671,6 +671,18 @@ describe('runGenerateAttacks', () => {
     expect(args).toContain('security');
   });
 
+  it('appends --spaceId with a trimmed value when spaceId includes surrounding spaces', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, '  security  ');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).toContain('--spaceId');
+    expect(args).toContain('security');
+    expect(args).not.toContain('  security  ');
+  });
+
   it('does not append --spaceId when spaceId is empty string', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, '');
@@ -681,9 +693,30 @@ describe('runGenerateAttacks', () => {
     expect(args).not.toContain('--spaceId');
   });
 
+  it('does not append --spaceId when spaceId is whitespace only', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, '   ');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).not.toContain('--spaceId');
+  });
+
   it('does not append --spaceId when spaceId is "default"', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, 'default');
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).not.toContain('--spaceId');
+    expect(args).not.toContain('default');
+  });
+
+  it('does not append --spaceId when trimmed spaceId is "default"', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS, '  default  ');
     child.emit('close', 0, null);
     await promise;
 
