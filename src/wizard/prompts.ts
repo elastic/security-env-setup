@@ -150,7 +150,7 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
     const nonDefaultSpaces = spaces.filter((s) => s.id !== 'default');
     const { repoPath, additionalDataSpaces: selectedSpaces } = await inquirer.prompt<{
       repoPath: string;
-      additionalDataSpaces: string[];
+      additionalDataSpaces?: string[];
     }>([
       {
         type: 'input',
