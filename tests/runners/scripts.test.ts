@@ -450,7 +450,7 @@ describe('runGenerateEvents', () => {
 
   it('does not set NODE_TLS_REJECT_UNAUTHORIZED in the environment', async () => {
     const originalNodeTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
 
     try {
       const child = mockSpawnSuccess();
