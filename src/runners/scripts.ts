@@ -376,10 +376,7 @@ function normalizePort(url: string): string {
     const authority =
       authorityStart === -1 ? '' : url.slice(authorityStart + 2, authorityEnd);
     const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1);
-    const explicitPort443 =
-      hostAndPort.startsWith('[') && hostAndPort.includes(']:443')
-        ? hostAndPort.endsWith(']:443')
-        : /:443$/.test(hostAndPort);
+    const explicitPort443 = /:443$/.test(hostAndPort);
 
     if (parsedUrl.port === '443' || explicitPort443) {
       parsedUrl.port = '9243';
