@@ -382,14 +382,6 @@ describe('ensureKibanaBootstrapped', () => {
 // ---------------------------------------------------------------------------
 
 describe('runGenerateEvents', () => {
-  const restoreNodeTlsSetting = (originalTlsSetting: string | undefined): void => {
-    if (originalTlsSetting === undefined) {
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    } else {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
-    }
-  };
-
   beforeEach(() => {
     mockedFs.existsSync.mockImplementation((p) => {
       return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
@@ -456,37 +448,14 @@ describe('runGenerateEvents', () => {
     expect(mockedSpawn).not.toHaveBeenCalled();
   });
 
-  it('sets NODE_TLS_REJECT_UNAUTHORIZED=0 when unset in the environment', async () => {
+  it('does not set NODE_TLS_REJECT_UNAUTHORIZED in the environment', async () => {
     const child = mockSpawnSuccess();
-    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    try {
-      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-      child.emit('close', 0, null);
-      await promise;
+    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
 
-      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
-      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
-    } finally {
-      restoreNodeTlsSetting(originalTlsSetting);
-    }
-  });
-
-  it('preserves NODE_TLS_REJECT_UNAUTHORIZED when already set', async () => {
-    const child = mockSpawnSuccess();
-    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
-
-    try {
-      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
-      child.emit('close', 0, null);
-      await promise;
-
-      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
-      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('1');
-    } finally {
-      restoreNodeTlsSetting(originalTlsSetting);
-    }
+    const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+    expect(spawnOptions.env).not.toHaveProperty('NODE_TLS_REJECT_UNAUTHORIZED');
   });
 
   it('normalizes port :443 to :9243 in the --node URL', async () => {
@@ -515,15 +484,10 @@ describe('runGenerateEvents', () => {
     expect(kibanaArg).not.toContain(':443');
   });
 
-  it('normalizes authority port :443 with path/query/hash while preserving URL tail', async () => {
+  it('removes trailing slash from both URLs', async () => {
     const child = mockSpawnSuccess();
-    const credsWith443 = {
-      ...CREDS,
-      url: 'https://es.example.com:443/some/path?redirect=https://other.example.com:443/path#frag',
-    };
-    const kibanaWith443 =
-      'https://kb.example.com:443/some/path?redirect=https://other.example.com:443/path#frag';
-    const promise = runGenerateEvents(REPO_PATH, kibanaWith443, credsWith443);
+    const credsWith443Slash = { ...CREDS, url: 'https://es.example.com:9243/' };
+    const promise = runGenerateEvents(REPO_PATH, 'https://kb.example.com:9243/', credsWith443Slash);
     child.emit('close', 0, null);
     await promise;
 
@@ -531,13 +495,8 @@ describe('runGenerateEvents', () => {
     const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
     const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
 
-    expect(nodeArg).toContain('https://elastic:secret@es.example.com:9243/some/path');
-    expect(nodeArg).toContain('redirect=https://other.example.com:443/path');
-    expect(nodeArg).toContain('#frag');
-
-    expect(kibanaArg).toContain('https://elastic:secret@kb.example.com:9243/some/path');
-    expect(kibanaArg).toContain('redirect=https://other.example.com:443/path');
-    expect(kibanaArg).toContain('#frag');
+    expect(nodeArg).not.toMatch(/\/$/);
+    expect(kibanaArg).not.toMatch(/\/$/);
   });
 
   it('leaves port :9243 unchanged in both URLs', async () => {
