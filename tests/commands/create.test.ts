@@ -267,6 +267,10 @@ describe('create command', () => {
     // runAllDataGeneration handles events for the default space; no extra calls expected
     expect(mockedRunGenerateAttacks).not.toHaveBeenCalled();
     expect(mockedRunGenerateCases).not.toHaveBeenCalled();
+
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('Data spaces');
+    expect(output).not.toContain('devops');
   });
 
   it('continues loop when one additional space fails and warns', async () => {

@@ -155,8 +155,9 @@ async function runCreate(): Promise<void> {
 
   // ── Summary ───────────────────────────────────────────────────────────────
   const additionalDataSpaces = config.additionalDataSpaces ?? [];
+  const ranPerSpaceDataGeneration = kibanaRepoPath.length > 0 && (generateAlerts || generateCases);
   const dataSpaces =
-    kibanaRepoPath.length > 0 && additionalDataSpaces.length > 0
+    ranPerSpaceDataGeneration && additionalDataSpaces.length > 0
       ? ['default', ...additionalDataSpaces]
       : [];
 

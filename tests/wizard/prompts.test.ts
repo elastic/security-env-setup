@@ -211,7 +211,7 @@ describe('prompt validator and filter functions', () => {
 
   // ── Last call, question 1: additionalDataSpaces ──────────────────────────
 
-  it('additionalDataSpaces when — shown when repoPath is set and non-default spaces exist', () => {
+  it('additionalDataSpaces when — shown when repoPath is set, non-default spaces exist, and alerts/cases are selected', () => {
     const lastCallIndex = promptCalls.length - 1;
     const q = promptCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
     expect(q.when?.({ repoPath: '/repo' })).toBe(true);
@@ -221,6 +221,19 @@ describe('prompt validator and filter functions', () => {
     const lastCallIndex = promptCalls.length - 1;
     const q = promptCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
     expect(q.when?.({ repoPath: '' })).toBe(false);
+  });
+
+  it('additionalDataSpaces when — hidden for events-only data generation', async () => {
+    jest.clearAllMocks();
+    setupPrompts({ dataChoices: ['events'], repoPath: '/repo' });
+    await runWizard();
+
+    const eventsOnlyCalls = mockedInquirer.prompt.mock.calls.map(
+      (call) => call[0] as Array<Record<string, unknown>>,
+    );
+    const lastCallIndex = eventsOnlyCalls.length - 1;
+    const q = eventsOnlyCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
+    expect(q.when?.({ repoPath: '/repo' })).toBe(false);
   });
 });
 
@@ -285,6 +298,7 @@ describe('runWizard', () => {
     setupPrompts({ dataChoices: ['events'], repoPath: '/repo' });
     const result = await runWizard();
     expect(result.config.dataTypes.generateEvents).toBe(true);
+    expect(result.config.additionalDataSpaces).toEqual([]);
   });
 
   it('sets all three data types when all selected', async () => {

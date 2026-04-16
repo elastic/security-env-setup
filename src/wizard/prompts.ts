@@ -140,6 +140,7 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
   const generateCases = dataChoices.includes('cases');
   const generateEvents = dataChoices.includes('events');
   const dataGenRequested = generateAlerts || generateCases || generateEvents;
+  const ranPerSpaceDataGeneration = generateAlerts || generateCases;
 
   // ── Step 6: Kibana repo path + additional spaces (only when data gen requested) ──
   let kibanaRepoPath = '';
@@ -170,12 +171,12 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
         message: 'Also generate data in additional spaces? (select any)',
         choices: nonDefaultSpaces.map((s) => ({ name: s.name, value: s.id })),
         when: (answers: Record<string, unknown>): boolean =>
-          Boolean(answers['repoPath']) && nonDefaultSpaces.length > 0,
+          Boolean(answers['repoPath']) && nonDefaultSpaces.length > 0 && ranPerSpaceDataGeneration,
         default: [],
       },
     ]);
     kibanaRepoPath = repoPath;
-    additionalDataSpaces = selectedSpaces ?? [];
+    additionalDataSpaces = ranPerSpaceDataGeneration ? (selectedSpaces ?? []) : [];
   }
 
   return {
