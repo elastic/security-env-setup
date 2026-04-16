@@ -421,7 +421,20 @@ export async function runGenerateEvents(
     embedCredentialsInUrl(normalizeUrl(kibanaUrl), credentials.username, credentials.password),
   );
 
-  const args = ['test:generate', '--node', esUrlWithCreds, '--kibana', kibanaUrlWithCreds];
+  const args = [
+    'test:generate',
+    '--node', esUrlWithCreds,
+    '--kibana', kibanaUrlWithCreds,
+    '--numHosts', '50',
+    '--numDocs', '20',
+    '--alertsPerHost', '10',
+    '--generations', '5',
+    '--children', '5',
+    '--relatedEvents', '10',
+    '--relatedAlerts', '10',
+    '--percentWithRelated', '70',
+    '--percentTerminated', '50',
+  ];
   const env = { ...process.env };
   delete env.NODE_TLS_REJECT_UNAUTHORIZED;
 
@@ -459,6 +472,11 @@ export async function runGenerateAttacks(
     '--elasticsearchUrl', credentials.url,
     '--username', credentials.username,
     '--password', credentials.password,
+    '--events', '500',
+    '--hosts', '10',
+    '--users', '10',
+    '--start-date', '30d',
+    '--max-preview-invocations', '15',
   ];
   const trimmedSpaceId = spaceId?.trim();
   // Skip --spaceId for the default space — the script already targets it by default.
@@ -485,6 +503,7 @@ export async function runGenerateCases(
   kibanaUrl: string,
   credentials: ElasticCredentials,
   spaceId?: string,
+  count = 1000,
 ): Promise<void> {
   const { generateCasesScript, scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
 
@@ -498,6 +517,7 @@ export async function runGenerateCases(
     '--kibana', kibanaUrl,
     '--username', credentials.username,
     '--password', credentials.password,
+    '--count', String(count),
   ];
   // Skip --space for the default space — the script already targets it by default.
   if (spaceId !== undefined && spaceId.trim().length > 0 && spaceId.trim() !== 'default') {

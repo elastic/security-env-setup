@@ -3,6 +3,7 @@ export interface DeploymentConfig {
   region: string;
   version: string;
   spaces: KibanaSpace[];
+  additionalDataSpaces?: string[];
   dataTypes: DataGenerationOptions;
 }
 

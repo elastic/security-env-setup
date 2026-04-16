@@ -4,7 +4,7 @@ import type { Environment } from '../types';
 import { hasApiKey } from '../config/store';
 import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
-import { runAllDataGeneration } from '../runners/scripts';
+import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '../runners/scripts';
 import { runWizard } from '../wizard/prompts';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
@@ -28,8 +28,9 @@ function printSummary(params: {
   password: string;
   spaceNames: string[];
   environment: Environment;
+  dataSpaces?: string[];
 }): void {
-  const { name, kibanaUrl, esUrl, username, password, spaceNames, environment } = params;
+  const { name, kibanaUrl, esUrl, username, password, spaceNames, environment, dataSpaces } = params;
 
   const line = chalk.cyan('─'.repeat(60));
   const header = chalk.bold.cyan('  Deployment Ready');
@@ -51,6 +52,9 @@ function printSummary(params: {
   logger.print(`  ${label('Username')}${value(username)}`);
   logger.print(`  ${label('Password')}${warn(password)}`);
   logger.print(`  ${label('Spaces')}${spaceNames.length > 0 ? value(spacesLine) : spacesLine}`);
+  if (dataSpaces && dataSpaces.length > 0) {
+    logger.print(`  ${label('Data spaces')}${value(dataSpaces.join(', '))}`);
+  }
   logger.print(line);
   logger.print(chalk.dim('  Keep your password safe — it will not be shown again.'));
   logger.print('');
@@ -120,11 +124,11 @@ async function runCreate(): Promise<void> {
   const { kibanaRepoPath, generateAlerts, generateCases, generateEvents } = config.dataTypes;
 
   if (kibanaRepoPath.length > 0) {
+    // Run all scripts against the Kibana default space first.
     const dataResult = await runAllDataGeneration({
       kibanaRepoPath,
       kibanaUrl: deployment.kibanaUrl,
       credentials,
-      spaceId: createdSpaces[0]?.id,
       generateAlerts,
       generateCases,
       generateEvents,
@@ -133,9 +137,29 @@ async function runCreate(): Promise<void> {
     for (const errorMsg of dataResult.errors) {
       logger.warn(errorMsg);
     }
+
+    // Run attacks and cases for each additional space (events always runs once only).
+    for (const spaceId of config.additionalDataSpaces ?? []) {
+      try {
+        if (generateAlerts) {
+          await runGenerateAttacks(kibanaRepoPath, deployment.kibanaUrl, credentials, spaceId);
+        }
+        if (generateCases) {
+          await runGenerateCases(kibanaRepoPath, deployment.kibanaUrl, credentials, spaceId, 300);
+        }
+      } catch (err) {
+        logger.warn(`Data generation for space "${spaceId}" failed: ${getErrorMessage(err)}`);
+      }
+    }
   }
 
   // ── Summary ───────────────────────────────────────────────────────────────
+  const additionalDataSpaces = config.additionalDataSpaces ?? [];
+  const dataSpaces =
+    kibanaRepoPath.length > 0 && additionalDataSpaces.length > 0
+      ? ['default', ...additionalDataSpaces]
+      : [];
+
   printSummary({
     name: config.name,
     environment,
@@ -144,6 +168,7 @@ async function runCreate(): Promise<void> {
     username: credentials.username,
     password: credentials.password,
     spaceNames: createdSpaces.map((s) => s.name),
+    dataSpaces,
   });
 }
 
