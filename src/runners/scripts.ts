@@ -358,9 +358,33 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
 }
 
 /**
+ * Embeds `username:password` into a URL's authority component so it can be
+ * passed to scripts that require credentials in the URL rather than as
+ * separate flags. Existing embedded credentials are overwritten safely.
+ */
+function embedCredentialsInUrl(url: string, username: string, password: string): string {
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error(`Unsupported URL protocol: ${parsedUrl.protocol}`);
+    }
+    parsedUrl.username = username;
+    parsedUrl.password = password;
+    return parsedUrl.toString();
+  } catch (error) {
+    throw new Error(
+      `Invalid HTTP(S) URL for embedding credentials: ${url}. ${getErrorMessage(error)}`,
+    );
+  }
+}
+
+/**
  * Runs `yarn test:generate` inside the security_solution plugin directory to
- * populate resolver / event data. Credentials are passed via environment
- * variables rather than CLI args.
+ * populate resolver / event data.
+ *
+ * The script's interface requires credentials to be embedded directly in the
+ * `--node` and `--kibana` URL flags (e.g. `https://user:pass@host`).  There is
+ * no environment-variable alternative, so this is the only way to pass auth.
  */
 export async function runGenerateEvents(
   kibanaRepoPath: string,
@@ -368,18 +392,34 @@ export async function runGenerateEvents(
   credentials: ElasticCredentials,
 ): Promise<void> {
   const { scriptDir } = detectKibanaScriptPaths(kibanaRepoPath);
-  const env = buildScriptEnv(kibanaUrl, credentials);
 
-  // Credentials are injected via environment variables; the script reads them
-  // from the environment rather than accepting CLI flags.
-  await spawnProcess(
-    YARN_CMD,
-    ['test:generate'],
-    scriptDir,
-    env,
-    'Generating events',
-    { passthroughOutput: true },
+  // Warn once so the operator is aware credentials will appear in the process
+  // argument list for the duration of the script run.
+  logger.warn(
+    'Passing Elasticsearch/Kibana credentials embedded in URLs for yarn test:generate; ' +
+      'they may be visible in process listings while the script runs.',
   );
+
+  const esUrlWithCreds = embedCredentialsInUrl(
+    credentials.url,
+    credentials.username,
+    credentials.password,
+  );
+  const kibanaUrlWithCreds = embedCredentialsInUrl(
+    kibanaUrl,
+    credentials.username,
+    credentials.password,
+  );
+
+  const args = ['test:generate', '--node', esUrlWithCreds, '--kibana', kibanaUrlWithCreds];
+  const env = { ...process.env };
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
+    env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  }
+
+  await spawnProcess(YARN_CMD, args, scriptDir, env, 'Generating events', {
+    passthroughOutput: true,
+  });
 }
 
 /**
@@ -465,6 +505,10 @@ function enhanceModuleError(msg: string): string {
 
 /**
  * Orchestrates all selected data-generation scripts sequentially.
+ * Execution order: alerts → events → cases.
+ * Alerts run first because they are the most reliable; events (which contacts
+ * a local Elasticsearch proxy) is run second so a connection failure there
+ * does not block or obscure alert generation output.
  * Individual script failures are captured in `result.errors` and do not abort
  * the remaining scripts.
  *
@@ -496,15 +540,7 @@ export async function runAllDataGeneration(
     await ensureKibanaBootstrapped(options.kibanaRepoPath);
   }
 
-  if (options.generateEvents) {
-    try {
-      await runGenerateEvents(options.kibanaRepoPath, options.kibanaUrl, options.credentials);
-      result.eventsRan = true;
-    } catch (err) {
-      result.errors.push(`Events generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
-    }
-  }
-
+  // 1. Alerts — most reliable, run first.
   if (options.generateAlerts) {
     try {
       await runGenerateAttacks(
@@ -519,6 +555,17 @@ export async function runAllDataGeneration(
     }
   }
 
+  // 2. Events — run after alerts so a local-proxy failure does not obscure alert output.
+  if (options.generateEvents) {
+    try {
+      await runGenerateEvents(options.kibanaRepoPath, options.kibanaUrl, options.credentials);
+      result.eventsRan = true;
+    } catch (err) {
+      result.errors.push(`Events generation failed: ${enhanceModuleError(getErrorMessage(err))}`);
+    }
+  }
+
+  // 3. Cases.
   if (options.generateCases) {
     try {
       await runGenerateCases(

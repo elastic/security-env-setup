@@ -382,13 +382,21 @@ describe('ensureKibanaBootstrapped', () => {
 // ---------------------------------------------------------------------------
 
 describe('runGenerateEvents', () => {
+  const restoreNodeTlsSetting = (originalTlsSetting: string | undefined): void => {
+    if (originalTlsSetting === undefined) {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    } else {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
+    }
+  };
+
   beforeEach(() => {
     mockedFs.existsSync.mockImplementation((p) => {
       return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
     });
   });
 
-  it('spawns yarn test:generate in the plugin directory with no extra flags', async () => {
+  it('spawns yarn test:generate in the plugin directory with --node and --kibana', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
@@ -396,23 +404,100 @@ describe('runGenerateEvents', () => {
 
     expect(mockedSpawn).toHaveBeenCalledWith(
       expect.stringMatching(/yarn/),
-      ['test:generate'],
+      expect.arrayContaining(['test:generate', '--node', '--kibana']),
       expect.objectContaining({ cwd: NEW_PLUGIN_DIR }),
     );
   });
 
-  it('passes credentials via environment variables, not as CLI args', async () => {
+  it('embeds credentials in --node and --kibana URLs', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
     child.emit('close', 0, null);
     await promise;
 
-    const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
-    expect(spawnOptions.env['ELASTICSEARCH_PASSWORD']).toBe('secret');
-    expect(spawnOptions.env['KIBANA_URL']).toBe(KIBANA_URL);
-    const spawnArgs = [...mockedSpawn.mock.calls[0][1]];
-    expect(spawnArgs).not.toContain('secret');
-    expect(spawnArgs).not.toContain('elastic');
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+
+    expect(nodeArg).toContain('elastic:secret@');
+    expect(nodeArg).toContain('es.example.com');
+    expect(kibanaArg).toContain('elastic:secret@');
+    expect(kibanaArg).toContain('kb.example.com');
+  });
+
+  it('overwrites existing credentials in --node and --kibana URLs', async () => {
+    const child = mockSpawnSuccess();
+    const credsWithEmbeddedAuth: ElasticCredentials = {
+      ...CREDS,
+      url: 'https://old-user:old-pass@es.example.com:9243',
+    };
+    const promise = runGenerateEvents(
+      REPO_PATH,
+      'https://old-user:old-pass@kb.example.com:9243',
+      credsWithEmbeddedAuth,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+
+    expect(nodeArg).toContain('elastic:secret@');
+    expect(nodeArg).not.toContain('old-user:old-pass@');
+    expect(kibanaArg).toContain('elastic:secret@');
+    expect(kibanaArg).not.toContain('old-user:old-pass@');
+  });
+
+  it('throws a clear error when the input URL is invalid', async () => {
+    await expect(runGenerateEvents(REPO_PATH, 'not-a-url', CREDS)).rejects.toThrow(
+      'Invalid HTTP(S) URL for embedding credentials',
+    );
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
+  it('sets NODE_TLS_REJECT_UNAUTHORIZED=0 when unset in the environment', async () => {
+    const child = mockSpawnSuccess();
+    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.emit('close', 0, null);
+      await promise;
+
+      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
+    } finally {
+      restoreNodeTlsSetting(originalTlsSetting);
+    }
+  });
+
+  it('preserves NODE_TLS_REJECT_UNAUTHORIZED when already set', async () => {
+    const child = mockSpawnSuccess();
+    const originalTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
+
+    try {
+      const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+      child.emit('close', 0, null);
+      await promise;
+
+      const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
+      expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('1');
+    } finally {
+      restoreNodeTlsSetting(originalTlsSetting);
+    }
+  });
+
+  it('warns that credentials will be visible in process listings', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('credentials embedded in URLs'),
+    );
   });
 
   it('resolves on exit code 0', async () => {
@@ -722,9 +807,9 @@ describe('runAllDataGeneration', () => {
   });
 
   it('collects errors without aborting remaining scripts', async () => {
-    // events fails, alerts succeeds — both use auto-close for sequential safety
-    mockSpawnAutoClose(1); // events exits with code 1
-    mockSpawnAutoClose(0); // alerts exits with code 0
+    // alerts runs first (new order), events second
+    mockSpawnAutoClose(1); // alerts exits with code 1
+    mockSpawnAutoClose(0); // events exits with code 0
 
     const result = await runAllDataGeneration({
       ...baseOptions,
@@ -732,10 +817,10 @@ describe('runAllDataGeneration', () => {
       generateAlerts: true,
     });
 
-    expect(result.eventsRan).toBe(false);
-    expect(result.alertsRan).toBe(true);
+    expect(result.alertsRan).toBe(false);
+    expect(result.eventsRan).toBe(true);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain('Events generation failed');
+    expect(result.errors[0]).toContain('Alerts generation failed');
   });
 
   it('throws when kibanaRepoPath does not exist', async () => {
