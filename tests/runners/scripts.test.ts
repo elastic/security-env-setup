@@ -531,23 +531,23 @@ describe('runGenerateEvents', () => {
 
     const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
     expect(spawnArgs).toContain('--numHosts');
-    expect(spawnArgs[spawnArgs.indexOf('--numHosts') + 1]).toBe('50');
+    expect(spawnArgs[spawnArgs.indexOf('--numHosts') + 1]).toBe('5');
     expect(spawnArgs).toContain('--numDocs');
-    expect(spawnArgs[spawnArgs.indexOf('--numDocs') + 1]).toBe('20');
+    expect(spawnArgs[spawnArgs.indexOf('--numDocs') + 1]).toBe('10');
     expect(spawnArgs).toContain('--alertsPerHost');
-    expect(spawnArgs[spawnArgs.indexOf('--alertsPerHost') + 1]).toBe('10');
+    expect(spawnArgs[spawnArgs.indexOf('--alertsPerHost') + 1]).toBe('5');
     expect(spawnArgs).toContain('--generations');
-    expect(spawnArgs[spawnArgs.indexOf('--generations') + 1]).toBe('5');
+    expect(spawnArgs[spawnArgs.indexOf('--generations') + 1]).toBe('3');
     expect(spawnArgs).toContain('--children');
-    expect(spawnArgs[spawnArgs.indexOf('--children') + 1]).toBe('5');
+    expect(spawnArgs[spawnArgs.indexOf('--children') + 1]).toBe('3');
     expect(spawnArgs).toContain('--relatedEvents');
-    expect(spawnArgs[spawnArgs.indexOf('--relatedEvents') + 1]).toBe('10');
+    expect(spawnArgs[spawnArgs.indexOf('--relatedEvents') + 1]).toBe('5');
     expect(spawnArgs).toContain('--relatedAlerts');
-    expect(spawnArgs[spawnArgs.indexOf('--relatedAlerts') + 1]).toBe('10');
+    expect(spawnArgs[spawnArgs.indexOf('--relatedAlerts') + 1]).toBe('5');
     expect(spawnArgs).toContain('--percentWithRelated');
-    expect(spawnArgs[spawnArgs.indexOf('--percentWithRelated') + 1]).toBe('70');
+    expect(spawnArgs[spawnArgs.indexOf('--percentWithRelated') + 1]).toBe('30');
     expect(spawnArgs).toContain('--percentTerminated');
-    expect(spawnArgs[spawnArgs.indexOf('--percentTerminated') + 1]).toBe('50');
+    expect(spawnArgs[spawnArgs.indexOf('--percentTerminated') + 1]).toBe('30');
   });
 
   it('warns that credentials will be visible in process listings', async () => {
