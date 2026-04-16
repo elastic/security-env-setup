@@ -438,13 +438,22 @@ export async function runGenerateAttacks(
     throw new Error(`generate_cli.js not found at: ${generateCli}`);
   }
 
+  // generate_cli.js reads --password from CLI flags, not from environment variables.
+  if (credentials.password.trim().length > 0) {
+    logger.warn(
+      'Passing Elasticsearch password via --password to generate_cli.js; this may be visible in process listings while the script runs.',
+    );
+  }
+
   const args = [
     '--attacks',
     '--kibanaUrl', kibanaUrl,
     '--elasticsearchUrl', credentials.url,
     '--username', credentials.username,
+    '--password', credentials.password,
   ];
-  if (spaceId !== undefined && spaceId.trim().length > 0) {
+  // Skip --spaceId for the default space — the script already targets it by default.
+  if (spaceId !== undefined && spaceId.trim().length > 0 && spaceId.trim() !== 'default') {
     args.push('--spaceId', spaceId.trim());
   }
 
@@ -481,7 +490,8 @@ export async function runGenerateCases(
     '--username', credentials.username,
     '--password', credentials.password,
   ];
-  if (spaceId !== undefined && spaceId.trim().length > 0) {
+  // Skip --space for the default space — the script already targets it by default.
+  if (spaceId !== undefined && spaceId.trim().length > 0 && spaceId.trim() !== 'default') {
     args.push('--space', spaceId.trim());
   }
 
