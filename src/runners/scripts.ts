@@ -358,12 +358,37 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
 }
 
 /**
- * Replaces port :443 with :9243 in a URL string.
+ * Replaces authority port 443 with 9243 in a URL string.
  * yarn test:generate requires port 9243 for both Elasticsearch and Kibana,
  * but the Cloud API may return port 443 (standard HTTPS) for some deployments.
  */
 function normalizePort(url: string): string {
-  return url.replace(/:443$/, ':9243').replace(/:443\//, ':9243/');
+  try {
+    const parsedUrl = new URL(url);
+    const authorityStart = url.indexOf('//');
+    const authorityEndCandidates = [
+      url.indexOf('/', authorityStart + 2),
+      url.indexOf('?', authorityStart + 2),
+      url.indexOf('#', authorityStart + 2),
+    ].filter((index) => index !== -1);
+    const authorityEnd =
+      authorityEndCandidates.length > 0 ? Math.min(...authorityEndCandidates) : url.length;
+    const authority =
+      authorityStart === -1 ? '' : url.slice(authorityStart + 2, authorityEnd);
+    const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1);
+    const explicitPort443 =
+      hostAndPort.startsWith('[') && hostAndPort.includes(']:443')
+        ? hostAndPort.endsWith(']:443')
+        : /:443$/.test(hostAndPort);
+
+    if (parsedUrl.port === '443' || explicitPort443) {
+      parsedUrl.port = '9243';
+      return parsedUrl.toString();
+    }
+  } catch {
+    // Keep original value so embedCredentialsInUrl throws a single clear URL error.
+  }
+  return url;
 }
 
 /**

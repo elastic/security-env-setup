@@ -515,6 +515,31 @@ describe('runGenerateEvents', () => {
     expect(kibanaArg).not.toContain(':443');
   });
 
+  it('normalizes authority port :443 with path/query/hash while preserving URL tail', async () => {
+    const child = mockSpawnSuccess();
+    const credsWith443 = {
+      ...CREDS,
+      url: 'https://es.example.com:443/some/path?redirect=https://other.example.com:443/path#frag',
+    };
+    const kibanaWith443 =
+      'https://kb.example.com:443/some/path?redirect=https://other.example.com:443/path#frag';
+    const promise = runGenerateEvents(REPO_PATH, kibanaWith443, credsWith443);
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    const nodeArg = spawnArgs[spawnArgs.indexOf('--node') + 1] ?? '';
+    const kibanaArg = spawnArgs[spawnArgs.indexOf('--kibana') + 1] ?? '';
+
+    expect(nodeArg).toContain('https://elastic:secret@es.example.com:9243/some/path');
+    expect(nodeArg).toContain('redirect=https://other.example.com:443/path');
+    expect(nodeArg).toContain('#frag');
+
+    expect(kibanaArg).toContain('https://elastic:secret@kb.example.com:9243/some/path');
+    expect(kibanaArg).toContain('redirect=https://other.example.com:443/path');
+    expect(kibanaArg).toContain('#frag');
+  });
+
   it('leaves port :9243 unchanged in both URLs', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
