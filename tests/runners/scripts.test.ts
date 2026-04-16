@@ -523,6 +523,33 @@ describe('runGenerateEvents', () => {
     expect(kibanaArg).toContain(':9243');
   });
 
+  it('passes optimized generation parameters', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const spawnArgs = [...mockedSpawn.mock.calls[0][1]] as string[];
+    expect(spawnArgs).toContain('--numHosts');
+    expect(spawnArgs[spawnArgs.indexOf('--numHosts') + 1]).toBe('50');
+    expect(spawnArgs).toContain('--numDocs');
+    expect(spawnArgs[spawnArgs.indexOf('--numDocs') + 1]).toBe('20');
+    expect(spawnArgs).toContain('--alertsPerHost');
+    expect(spawnArgs[spawnArgs.indexOf('--alertsPerHost') + 1]).toBe('10');
+    expect(spawnArgs).toContain('--generations');
+    expect(spawnArgs[spawnArgs.indexOf('--generations') + 1]).toBe('5');
+    expect(spawnArgs).toContain('--children');
+    expect(spawnArgs[spawnArgs.indexOf('--children') + 1]).toBe('5');
+    expect(spawnArgs).toContain('--relatedEvents');
+    expect(spawnArgs[spawnArgs.indexOf('--relatedEvents') + 1]).toBe('10');
+    expect(spawnArgs).toContain('--relatedAlerts');
+    expect(spawnArgs[spawnArgs.indexOf('--relatedAlerts') + 1]).toBe('10');
+    expect(spawnArgs).toContain('--percentWithRelated');
+    expect(spawnArgs[spawnArgs.indexOf('--percentWithRelated') + 1]).toBe('70');
+    expect(spawnArgs).toContain('--percentTerminated');
+    expect(spawnArgs[spawnArgs.indexOf('--percentTerminated') + 1]).toBe('50');
+  });
+
   it('warns that credentials will be visible in process listings', async () => {
     const child = mockSpawnSuccess();
     const promise = runGenerateEvents(REPO_PATH, KIBANA_URL, CREDS);
@@ -647,6 +674,25 @@ describe('runGenerateAttacks', () => {
     expect(args).toContain(CREDS.url);
     expect(args).toContain('--password');
     expect(args).toContain(CREDS.password);
+  });
+
+  it('passes optimized generation parameters', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateAttacks(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).toContain('--events');
+    expect(args[args.indexOf('--events') + 1]).toBe('500');
+    expect(args).toContain('--hosts');
+    expect(args[args.indexOf('--hosts') + 1]).toBe('10');
+    expect(args).toContain('--users');
+    expect(args[args.indexOf('--users') + 1]).toBe('10');
+    expect(args).toContain('--start-date');
+    expect(args[args.indexOf('--start-date') + 1]).toBe('30d');
+    expect(args).toContain('--max-preview-invocations');
+    expect(args[args.indexOf('--max-preview-invocations') + 1]).toBe('15');
   });
 
   it('warns that --password can be visible in process listings', async () => {
@@ -832,6 +878,28 @@ describe('runGenerateCases', () => {
 
     const args = [...mockedSpawn.mock.calls[0][1]];
     expect(args).not.toContain('--space');
+  });
+
+  it('passes --count 1000 by default', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS);
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).toContain('--count');
+    expect(args[args.indexOf('--count') + 1]).toBe('1000');
+  });
+
+  it('passes custom count when specified', async () => {
+    const child = mockSpawnSuccess();
+    const promise = runGenerateCases(REPO_PATH, KIBANA_URL, CREDS, undefined, 300);
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = [...mockedSpawn.mock.calls[0][1]];
+    expect(args).toContain('--count');
+    expect(args[args.indexOf('--count') + 1]).toBe('300');
   });
 
   it('throws when neither generate_cases.js candidate path exists', async () => {

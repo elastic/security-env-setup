@@ -273,7 +273,7 @@ export async function createDeployment(
             cluster_topology: [
               {
                 instance_configuration_id: configs.kibana,
-                size: { value: 1024, resource: 'memory' },
+                size: { value: 4096, resource: 'memory' },
                 zone_count: 1,
               },
             ],

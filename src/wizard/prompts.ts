@@ -140,12 +140,18 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
   const generateCases = dataChoices.includes('cases');
   const generateEvents = dataChoices.includes('events');
   const dataGenRequested = generateAlerts || generateCases || generateEvents;
+  const ranPerSpaceDataGeneration = generateAlerts || generateCases;
 
-  // ── Step 6: Kibana repo path (only when data gen is requested) ─────────────
+  // ── Step 6: Kibana repo path + additional spaces (only when data gen requested) ──
   let kibanaRepoPath = '';
+  let additionalDataSpaces: string[] = [];
 
   if (dataGenRequested) {
-    const { repoPath } = await inquirer.prompt<{ repoPath: string }>([
+    const nonDefaultSpaces = spaces.filter((s) => s.id !== 'default');
+    const { repoPath, additionalDataSpaces: selectedSpaces } = await inquirer.prompt<{
+      repoPath: string;
+      additionalDataSpaces?: string[];
+    }>([
       {
         type: 'input',
         name: 'repoPath',
@@ -159,8 +165,18 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
         },
         filter: (input: string): string => input.trim(),
       },
+      {
+        type: 'checkbox',
+        name: 'additionalDataSpaces',
+        message: 'Also generate data in additional spaces? (select any)',
+        choices: nonDefaultSpaces.map((s) => ({ name: s.name, value: s.id })),
+        when: (answers: Record<string, unknown>): boolean =>
+          Boolean(answers['repoPath']) && nonDefaultSpaces.length > 0 && ranPerSpaceDataGeneration,
+        default: [],
+      },
     ]);
     kibanaRepoPath = repoPath;
+    additionalDataSpaces = ranPerSpaceDataGeneration ? (selectedSpaces ?? []) : [];
   }
 
   return {
@@ -169,6 +185,7 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
       region,
       version,
       spaces,
+      additionalDataSpaces,
       dataTypes: {
         kibanaRepoPath,
         generateAlerts,

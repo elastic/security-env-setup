@@ -9,7 +9,7 @@ import ora from 'ora';
 import { runWizard } from '@wizard/prompts';
 import { createDeployment, waitForDeployment } from '@api/cloud';
 import { createSpaces, initializeSecurityApp } from '@api/kibana';
-import { runAllDataGeneration } from '@runners/scripts';
+import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '@runners/scripts';
 import { hasApiKey } from '@config/store';
 import { createCommand } from '@commands/create';
 
@@ -29,6 +29,8 @@ const mockedWaitForDeployment = waitForDeployment as jest.MockedFunction<typeof 
 const mockedCreateSpaces = createSpaces as jest.MockedFunction<typeof createSpaces>;
 const mockedInitSecurity = initializeSecurityApp as jest.MockedFunction<typeof initializeSecurityApp>;
 const mockedRunAllDataGen = runAllDataGeneration as jest.MockedFunction<typeof runAllDataGeneration>;
+const mockedRunGenerateAttacks = runGenerateAttacks as jest.MockedFunction<typeof runGenerateAttacks>;
+const mockedRunGenerateCases = runGenerateCases as jest.MockedFunction<typeof runGenerateCases>;
 const mockedHasApiKey = hasApiKey as jest.MockedFunction<typeof hasApiKey>;
 
 const WIZARD_RESULT = {
@@ -94,6 +96,8 @@ beforeEach(() => {
     casesRan: false,
     errors: [],
   });
+  mockedRunGenerateAttacks.mockResolvedValue(undefined);
+  mockedRunGenerateCases.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -201,5 +205,126 @@ describe('create command', () => {
     expect(mockedRunAllDataGen).toHaveBeenCalledTimes(1);
     const warnOutput = consoleWarnSpy.mock.calls.flat().join('');
     expect(warnOutput).toContain('Alerts generation failed');
+  });
+
+  it('calls runGenerateAttacks and runGenerateCases for each additional space', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      config: {
+        ...WIZARD_RESULT.config,
+        additionalDataSpaces: ['devops', 'platform'],
+        dataTypes: {
+          kibanaRepoPath: '/home/user/kibana',
+          generateAlerts: true,
+          generateCases: true,
+          generateEvents: false,
+        },
+      },
+    });
+
+    await invokeCreate();
+
+    expect(mockedRunGenerateAttacks).toHaveBeenCalledTimes(2);
+    expect(mockedRunGenerateAttacks).toHaveBeenCalledWith(
+      '/home/user/kibana',
+      RUNNING_RESULT.kibanaUrl,
+      RUNNING_RESULT.credentials,
+      'devops',
+    );
+    expect(mockedRunGenerateAttacks).toHaveBeenCalledWith(
+      '/home/user/kibana',
+      RUNNING_RESULT.kibanaUrl,
+      RUNNING_RESULT.credentials,
+      'platform',
+    );
+    expect(mockedRunGenerateCases).toHaveBeenCalledTimes(2);
+    expect(mockedRunGenerateCases).toHaveBeenCalledWith(
+      '/home/user/kibana',
+      RUNNING_RESULT.kibanaUrl,
+      RUNNING_RESULT.credentials,
+      'devops',
+      300,
+    );
+  });
+
+  it('does not call runGenerateEvents in the additional spaces loop', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      config: {
+        ...WIZARD_RESULT.config,
+        additionalDataSpaces: ['devops'],
+        dataTypes: {
+          kibanaRepoPath: '/home/user/kibana',
+          generateAlerts: false,
+          generateCases: false,
+          generateEvents: true,
+        },
+      },
+    });
+
+    await invokeCreate();
+
+    // runAllDataGeneration handles events for the default space; no extra calls expected
+    expect(mockedRunGenerateAttacks).not.toHaveBeenCalled();
+    expect(mockedRunGenerateCases).not.toHaveBeenCalled();
+
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('Data spaces');
+    expect(output).not.toContain('devops');
+  });
+
+  it('continues loop when one additional space fails and warns', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      config: {
+        ...WIZARD_RESULT.config,
+        additionalDataSpaces: ['devops', 'platform'],
+        dataTypes: {
+          kibanaRepoPath: '/home/user/kibana',
+          generateAlerts: true,
+          generateCases: false,
+          generateEvents: false,
+        },
+      },
+    });
+    mockedRunGenerateAttacks
+      .mockRejectedValueOnce(new Error('devops space not found'))
+      .mockResolvedValueOnce(undefined);
+
+    await invokeCreate();
+
+    expect(mockedRunGenerateAttacks).toHaveBeenCalledTimes(2);
+    const warnOutput = consoleWarnSpy.mock.calls.flat().join('');
+    expect(warnOutput).toContain('devops');
+    expect(warnOutput).toContain('devops space not found');
+  });
+
+  it('shows Data spaces line in summary when additionalDataSpaces is non-empty', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      config: {
+        ...WIZARD_RESULT.config,
+        additionalDataSpaces: ['devops'],
+        dataTypes: {
+          kibanaRepoPath: '/home/user/kibana',
+          generateAlerts: true,
+          generateCases: false,
+          generateEvents: false,
+        },
+      },
+    });
+
+    await invokeCreate();
+
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Data spaces');
+    expect(output).toContain('default');
+    expect(output).toContain('devops');
+  });
+
+  it('does not show Data spaces line when additionalDataSpaces is empty', async () => {
+    await invokeCreate();
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('Data spaces');
   });
 });

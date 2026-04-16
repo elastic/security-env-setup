@@ -20,6 +20,7 @@ function setupPrompts(overrides: {
   spaceNames?: string[];
   dataChoices?: string[];
   repoPath?: string;
+  additionalDataSpaces?: string[];
 } = {}): void {
   const {
     name = 'my-test-deploy',
@@ -30,6 +31,7 @@ function setupPrompts(overrides: {
     spaceNames = ['Security'],
     dataChoices = [],
     repoPath,
+    additionalDataSpaces = [],
   } = overrides;
 
   // Call 1: name + environment
@@ -46,11 +48,11 @@ function setupPrompts(overrides: {
   }
   // Call after spaces: dataChoices
   mockedInquirer.prompt.mockResolvedValueOnce({ dataChoices });
-  // Optional call: repoPath (only when dataChoices is non-empty)
+  // Optional call: repoPath + additionalDataSpaces (combined prompt, only when dataChoices is non-empty)
   if (dataChoices.length > 0 && repoPath !== undefined) {
-    mockedInquirer.prompt.mockResolvedValueOnce({ repoPath });
+    mockedInquirer.prompt.mockResolvedValueOnce({ repoPath, additionalDataSpaces });
   } else if (dataChoices.length > 0) {
-    mockedInquirer.prompt.mockResolvedValueOnce({ repoPath: '' });
+    mockedInquirer.prompt.mockResolvedValueOnce({ repoPath: '', additionalDataSpaces: [] });
   }
 }
 
@@ -206,6 +208,33 @@ describe('prompt validator and filter functions', () => {
     const { filter } = getQuestion(lastCallIndex, 0);
     expect(filter?.('  /repo  ')).toBe('/repo');
   });
+
+  // ── Last call, question 1: additionalDataSpaces ──────────────────────────
+
+  it('additionalDataSpaces when — shown when repoPath is set, non-default spaces exist, and alerts/cases are selected', () => {
+    const lastCallIndex = promptCalls.length - 1;
+    const q = promptCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
+    expect(q.when?.({ repoPath: '/repo' })).toBe(true);
+  });
+
+  it('additionalDataSpaces when — hidden when repoPath is empty', () => {
+    const lastCallIndex = promptCalls.length - 1;
+    const q = promptCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
+    expect(q.when?.({ repoPath: '' })).toBe(false);
+  });
+
+  it('additionalDataSpaces when — hidden for events-only data generation', async () => {
+    jest.clearAllMocks();
+    setupPrompts({ dataChoices: ['events'], repoPath: '/repo' });
+    await runWizard();
+
+    const eventsOnlyCalls = mockedInquirer.prompt.mock.calls.map(
+      (call) => call[0] as Array<Record<string, unknown>>,
+    );
+    const lastCallIndex = eventsOnlyCalls.length - 1;
+    const q = eventsOnlyCalls[lastCallIndex][1] as { when?: (a: Record<string, unknown>) => boolean };
+    expect(q.when?.({ repoPath: '/repo' })).toBe(false);
+  });
 });
 
 describe('runWizard', () => {
@@ -269,6 +298,7 @@ describe('runWizard', () => {
     setupPrompts({ dataChoices: ['events'], repoPath: '/repo' });
     const result = await runWizard();
     expect(result.config.dataTypes.generateEvents).toBe(true);
+    expect(result.config.additionalDataSpaces).toEqual([]);
   });
 
   it('sets all three data types when all selected', async () => {
@@ -303,5 +333,35 @@ describe('runWizard', () => {
     setupPrompts({ version: '8.18.0' });
     const result = await runWizard();
     expect(result.config.version).toBe('8.18.0');
+  });
+
+  it('returns selected additionalDataSpaces from wizard answers', async () => {
+    setupPrompts({
+      dataChoices: ['alerts'],
+      repoPath: '/repo',
+      spaceCount: 2,
+      spaceNames: ['Security', 'DevOps'],
+      additionalDataSpaces: ['devops'],
+    });
+    const result = await runWizard();
+    expect(result.config.additionalDataSpaces).toEqual(['devops']);
+  });
+
+  it('returns empty additionalDataSpaces when repoPath is empty', async () => {
+    setupPrompts({
+      dataChoices: ['alerts'],
+      repoPath: '',
+      spaceCount: 2,
+      spaceNames: ['Security', 'DevOps'],
+      additionalDataSpaces: [],
+    });
+    const result = await runWizard();
+    expect(result.config.additionalDataSpaces).toEqual([]);
+  });
+
+  it('returns empty additionalDataSpaces when no data types selected', async () => {
+    setupPrompts({ dataChoices: [] });
+    const result = await runWizard();
+    expect(result.config.additionalDataSpaces).toEqual([]);
   });
 });
