@@ -358,34 +358,14 @@ export async function ensureKibanaBootstrapped(kibanaRepoPath: string): Promise<
 }
 
 /**
- * Replaces authority port 443 with 9243 in a URL string.
- * yarn test:generate requires port 9243 for both Elasticsearch and Kibana,
- * but the Cloud API may return port 443 (standard HTTPS) for some deployments.
+ * Normalises a Cloud endpoint URL for yarn test:generate:
+ * - Replaces port :443 (with optional trailing slash) with :9243.
+ * - Strips any remaining trailing slash.
+ * Elastic Cloud uses valid SSL certificates, so this tool does not need to
+ * force-set NODE_TLS_REJECT_UNAUTHORIZED for the downstream script.
  */
-function normalizePort(url: string): string {
-  try {
-    const parsedUrl = new URL(url);
-    const authorityStart = url.indexOf('//');
-    const authorityEndCandidates = [
-      url.indexOf('/', authorityStart + 2),
-      url.indexOf('?', authorityStart + 2),
-      url.indexOf('#', authorityStart + 2),
-    ].filter((index) => index !== -1);
-    const authorityEnd =
-      authorityEndCandidates.length > 0 ? Math.min(...authorityEndCandidates) : url.length;
-    const authority =
-      authorityStart === -1 ? '' : url.slice(authorityStart + 2, authorityEnd);
-    const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1);
-    const explicitPort443 = /:443$/.test(hostAndPort);
-
-    if (parsedUrl.port === '443' || explicitPort443) {
-      parsedUrl.port = '9243';
-      return parsedUrl.toString();
-    }
-  } catch {
-    // Keep original value so embedCredentialsInUrl throws a single clear URL error.
-  }
-  return url;
+function normalizeUrl(url: string): string {
+  return url.replace(/:443(\/?)$/, ':9243').replace(/\/$/, '');
 }
 
 /**
@@ -431,22 +411,19 @@ export async function runGenerateEvents(
       'they may be visible in process listings while the script runs.',
   );
 
-  const esUrlWithCreds = embedCredentialsInUrl(
-    normalizePort(credentials.url),
-    credentials.username,
-    credentials.password,
+  // normalizeUrl is applied before embedding so the URL parser sees the correct
+  // port, and again after because new URL().toString() re-adds a trailing slash
+  // for root-path URLs.
+  const esUrlWithCreds = normalizeUrl(
+    embedCredentialsInUrl(normalizeUrl(credentials.url), credentials.username, credentials.password),
   );
-  const kibanaUrlWithCreds = embedCredentialsInUrl(
-    normalizePort(kibanaUrl),
-    credentials.username,
-    credentials.password,
+  const kibanaUrlWithCreds = normalizeUrl(
+    embedCredentialsInUrl(normalizeUrl(kibanaUrl), credentials.username, credentials.password),
   );
 
   const args = ['test:generate', '--node', esUrlWithCreds, '--kibana', kibanaUrlWithCreds];
   const env = { ...process.env };
-  if (env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
-    env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-  }
+  delete env.NODE_TLS_REJECT_UNAUTHORIZED;
 
   await spawnProcess(YARN_CMD, args, scriptDir, env, 'Generating events', {
     passthroughOutput: true,
