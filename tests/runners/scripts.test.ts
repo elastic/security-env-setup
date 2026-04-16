@@ -382,6 +382,14 @@ describe('ensureKibanaBootstrapped', () => {
 // ---------------------------------------------------------------------------
 
 describe('runGenerateEvents', () => {
+  const restoreNodeTlsSetting = (originalTlsSetting: string | undefined): void => {
+    if (originalTlsSetting === undefined) {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    } else {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
+    }
+  };
+
   beforeEach(() => {
     mockedFs.existsSync.mockImplementation((p) => {
       return p === REPO_PATH || p === NEW_PLUGIN_DIR || p === NEW_CASES_SCRIPT;
@@ -460,11 +468,7 @@ describe('runGenerateEvents', () => {
       const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
       expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
     } finally {
-      if (originalTlsSetting === undefined) {
-        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      } else {
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
-      }
+      restoreNodeTlsSetting(originalTlsSetting);
     }
   });
 
@@ -481,11 +485,7 @@ describe('runGenerateEvents', () => {
       const spawnOptions = mockedSpawn.mock.calls[0][2] as { env: Record<string, string> };
       expect(spawnOptions.env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('1');
     } finally {
-      if (originalTlsSetting === undefined) {
-        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-      } else {
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsSetting;
-      }
+      restoreNodeTlsSetting(originalTlsSetting);
     }
   });
 
