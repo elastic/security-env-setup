@@ -443,6 +443,129 @@ describe('runDocsGeneratorCommand', () => {
     // Single-quote escaped: it'\''s a test
     expect(script).toContain("it'\\''s a test");
   });
+
+  it('streams stderr output from the child process to process.stderr', async () => {
+    mockedFs.existsSync.mockImplementation((p) => p === NVM_SH);
+    const child = mockSpawnSuccess();
+    const promise = runDocsGeneratorCommand(DIR, ['rules'], 'rules');
+    child.stderr.emit('data', Buffer.from('some stderr output\n'));
+    child.emit('close', 0, null);
+    await promise;
+    expect(stderrSpy).toHaveBeenCalledWith('some stderr output\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDocsGeneratorCommand — timeout behaviour
+// ---------------------------------------------------------------------------
+
+describe('runDocsGeneratorCommand — timeout', () => {
+  /** Wall-clock budget mirrored from the constant in docs-generator.ts (3 min). */
+  const TIMEOUT_MS = 3 * 60 * 1_000;
+  const GRACE_MS = 5_000;
+
+  let processKillSpy: jest.SpyInstance;
+
+  function createTimedOutChild(pid = 1234) {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      pid: number;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = pid;
+    return child;
+  }
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    processKillSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    mockedFs.existsSync.mockImplementation((p) => p === NVM_SH);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    processKillSpy.mockRestore();
+  });
+
+  it('sends SIGTERM to the process group when the timeout fires', async () => {
+    const child = createTimedOutChild(1234);
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['generate-entity-ai-insights'], 'generate-entity-ai-insights');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    child.emit('close', null, 'SIGTERM');
+    await promise;
+
+    expect(processKillSpy).toHaveBeenCalledWith(-1234, 'SIGTERM');
+  });
+
+  it('sends SIGKILL after the 5-second grace period', async () => {
+    const child = createTimedOutChild(5678);
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['generate-entity-ai-insights'], 'generate-entity-ai-insights');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS + GRACE_MS);
+    child.emit('close', null, 'SIGKILL');
+    await promise;
+
+    expect(processKillSpy).toHaveBeenCalledWith(-5678, 'SIGTERM');
+    expect(processKillSpy).toHaveBeenCalledWith(-5678, 'SIGKILL');
+  });
+
+  it('logs a timeout warning containing the duration and the description', async () => {
+    const child = createTimedOutChild();
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['generate-entity-ai-insights'], 'generate-entity-ai-insights');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    child.emit('close', null, 'SIGTERM');
+    await promise;
+
+    // TIMEOUT_MS / 1_000 = 180 seconds
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('180'));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('generate-entity-ai-insights'),
+    );
+  });
+
+  it('resolves without throwing when the command times out', async () => {
+    const child = createTimedOutChild();
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['generate-entity-ai-insights'], 'generate-entity-ai-insights');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    child.emit('close', null, 'SIGTERM');
+
+    await expect(promise).resolves.toBeUndefined();
+  });
+
+  it('clears the timeout and does NOT kill when the command exits before the deadline', async () => {
+    const child = createTimedOutChild(9999);
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['quick-cmd'], 'quick-cmd');
+    // Natural exit before timeout
+    child.emit('close', 0, null);
+    await promise;
+
+    // Advance well past the timeout — no kill should occur
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS + GRACE_MS);
+    expect(processKillSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt process.kill when child.pid is undefined', async () => {
+    const child = createMockChild(); // no pid property
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = runDocsGeneratorCommand(DIR, ['cmd'], 'cmd');
+    await jest.advanceTimersByTimeAsync(TIMEOUT_MS);
+    child.emit('close', null, 'SIGTERM');
+    await promise;
+
+    expect(processKillSpy).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -614,6 +737,15 @@ describe('runCommand branch coverage', () => {
     mockSpawnAutoClose(0);
     await installDependencies(DIR);
     expect(mockedSpawn.mock.calls[0]?.[0]).toBe('yarn');
+  });
+
+  it('rejects when the spawn error event fires (runCommand error handler)', async () => {
+    mockedFs.existsSync.mockReturnValue(false); // nvm absent → yarn path
+    const child = createMockChild();
+    mockedSpawn.mockReturnValueOnce(child as unknown as ReturnType<typeof spawn>);
+    const promise = installDependencies(DIR);
+    child.emit('error', Object.assign(new Error('ENOENT: yarn not found'), { code: 'ENOENT' }));
+    await expect(promise).rejects.toThrow('ENOENT: yarn not found');
   });
 });
 

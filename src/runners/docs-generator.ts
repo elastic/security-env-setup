@@ -24,6 +24,9 @@ import {
 const REPO_URL = 'https://github.com/elastic/security-documents-generator.git';
 const EVENT_INDEX = 'logs-testlogs-default';
 
+/** Maximum wall-clock time allowed for a single `yarn start <cmd>` invocation. */
+const DOCS_GENERATOR_COMMAND_TIMEOUT_MS = 3 * 60 * 1_000; // 3 minutes per command
+
 // ---------------------------------------------------------------------------
 // Shell helpers
 // ---------------------------------------------------------------------------
@@ -228,21 +231,108 @@ export async function installDependencies(dir: string): Promise<void> {
 
 /**
  * Runs `yarn start <args...>` inside `dir` using the correct Node version.
- * A non-zero exit is logged as a warning but does NOT throw — the caller's
- * sequence continues regardless. This mirrors the bash `|| warn` fallback.
+ *
+ * A per-command wall-clock timeout of {@link DOCS_GENERATOR_COMMAND_TIMEOUT_MS}
+ * is enforced:
+ *   1. On expiry the process group receives SIGTERM.
+ *   2. After a 5-second grace period, SIGKILL is sent if the group is still
+ *      alive (the inner timer is `.unref()`-ed so it does not block the
+ *      Node event loop).
+ *
+ * Neither a non-zero exit nor a timeout throws — both are logged as warnings
+ * so the caller's sequence always continues.
  */
 export async function runDocsGeneratorCommand(
   dir: string,
   args: readonly string[],
   description: string,
 ): Promise<void> {
-  try {
-    await runWithNvm(dir, ['start', ...args]);
-  } catch (err) {
-    logger.warn(
-      `Comando falló (seguimos): yarn start ${description}: ${getErrorMessage(err)}`,
-    );
-  }
+  await new Promise<void>((resolve) => {
+    // ── Resolve command / env based on nvm availability ────────────────────
+    const nvmDir = resolveNvmDir();
+    let command: string;
+    let spawnArgs: string[];
+    let env: NodeJS.ProcessEnv;
+
+    if (nvmDir !== undefined) {
+      command = 'bash';
+      spawnArgs = ['-c', buildNvmBashCommand(nvmDir, ['start', ...args])];
+      env = { ...process.env, NVM_DIR: nvmDir };
+    } else {
+      logger.warn('nvm not found; using the Node on PATH');
+      command = 'yarn';
+      spawnArgs = ['start', ...args];
+      env = process.env;
+    }
+
+    // ── Spawn with detached:true so we can kill the whole process group ────
+    const child = spawn(command, spawnArgs, {
+      cwd: dir,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+
+    child.stdout?.on('data', (chunk: unknown) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      process.stdout.write(text);
+    });
+
+    child.stderr?.on('data', (chunk: unknown) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk);
+      process.stderr.write(text);
+    });
+
+    // ── Timeout: SIGTERM → 5 s grace → SIGKILL ────────────────────────────
+    let timedOut = false;
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        // process group may have already exited
+      }
+      setTimeout(() => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }, 5_000).unref();
+    }, DOCS_GENERATOR_COMMAND_TIMEOUT_MS);
+
+    // ── Process exit ──────────────────────────────────────────────────────
+    child.on('close', (code: number | null) => {
+      clearTimeout(timeoutHandle);
+
+      if (timedOut) {
+        logger.warn(
+          `Comando excedió ${DOCS_GENERATOR_COMMAND_TIMEOUT_MS / 1_000}s y fue interrumpido (seguimos): yarn start ${description}`,
+        );
+        resolve();
+        return;
+      }
+
+      if (code === 0) {
+        resolve();
+      } else {
+        const codeStr = code !== null ? String(code) : 'unknown';
+        logger.warn(
+          `Comando falló (seguimos): yarn start ${description}: exit code ${codeStr}`,
+        );
+        resolve();
+      }
+    });
+
+    child.on('error', (err: Error) => {
+      clearTimeout(timeoutHandle);
+      logger.warn(
+        `Comando falló (seguimos): yarn start ${description}: ${getErrorMessage(err)}`,
+      );
+      resolve();
+    });
+  });
 }
 
 /**
