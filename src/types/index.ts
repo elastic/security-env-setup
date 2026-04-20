@@ -84,3 +84,19 @@ export interface BulkRuleActionResponse {
   success: boolean;
   rules_count: number;
 }
+
+export type DocsGeneratorMode = 'stateful' | 'serverless';
+
+export type Volume = 'light' | 'medium' | 'heavy';
+
+export interface DocsGeneratorConfigOptions {
+  elasticsearchUrl: string;
+  kibanaUrl: string;
+  mode: DocsGeneratorMode;
+  credentials: ElasticCredentials;
+}
+
+export interface StandardSequenceOptions {
+  space: string;
+  volume: Volume;
+}
