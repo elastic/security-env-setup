@@ -37,6 +37,8 @@ export interface DataGenerationOptions {
 
 export type Environment = 'prod' | 'qa' | 'staging';
 
+export type Target = 'elastic-cloud' | 'local-stateful' | 'local-serverless';
+
 export interface AppConfig {
   apiKeys: Partial<Record<Environment, string>>;
   environment: Environment;

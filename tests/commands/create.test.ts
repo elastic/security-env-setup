@@ -47,6 +47,7 @@ const WIZARD_RESULT = {
     },
   },
   environment: 'prod' as const,
+  target: 'elastic-cloud' as const,
 };
 
 const INITIAL_RESULT = {
@@ -111,6 +112,28 @@ afterAll(() => {
 });
 
 describe('create command', () => {
+  it('logs not-yet-implemented and skips deployment for local-stateful', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      target: 'local-stateful' as const,
+    });
+    await invokeCreate();
+    expect(mockedCreateDeployment).not.toHaveBeenCalled();
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('local-stateful');
+  });
+
+  it('logs not-yet-implemented and skips deployment for local-serverless', async () => {
+    mockedRunWizard.mockResolvedValue({
+      ...WIZARD_RESULT,
+      target: 'local-serverless' as const,
+    });
+    await invokeCreate();
+    expect(mockedCreateDeployment).not.toHaveBeenCalled();
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('local-serverless');
+  });
+
   it('runs the full happy path — wizard → create → wait → spaces → security init', async () => {
     await invokeCreate();
 

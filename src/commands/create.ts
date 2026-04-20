@@ -82,7 +82,12 @@ async function runCreate(): Promise<void> {
   // ── Step 1/5: Interactive wizard ──────────────────────────────────────────
   logger.step(1, TOTAL_STEPS, 'Running deployment wizard…');
 
-  const { config, environment } = await runWizard();
+  const { config, environment, target } = await runWizard();
+
+  if (target === 'local-stateful' || target === 'local-serverless') {
+    logger.info(`Target '${target}' not yet implemented — coming in next iteration.`);
+    return;
+  }
 
   if (!hasApiKey(environment)) {
     logger.error(

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import * as inquirer from 'inquirer';
-import type { DeploymentConfig, Environment, KibanaSpace } from '../types';
+import type { DeploymentConfig, Environment, KibanaSpace, Target } from '../types';
 import { REGIONS } from '../regions';
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,47 @@ function nameToId(name: string): string {
 // Wizard
 // ---------------------------------------------------------------------------
 
-export async function runWizard(): Promise<{ config: DeploymentConfig; environment: Environment }> {
+export async function runWizard(): Promise<{
+  config: DeploymentConfig;
+  environment: Environment;
+  target: Target;
+}> {
+  // ── Step 0: environment type selection ────────────────────────────────────
+  const { target } = await inquirer.prompt<{ target: Target }>([
+    {
+      type: 'list',
+      name: 'target',
+      message: 'What kind of environment do you want to create?',
+      choices: [
+        { name: 'Elastic Cloud (ECH)', value: 'elastic-cloud' },
+        { name: 'Local stateful (self-hosted)', value: 'local-stateful' },
+        { name: 'Local serverless', value: 'local-serverless' },
+        { name: 'Serverless in QA', disabled: '(coming soon)' },
+      ],
+    },
+  ]);
+
+  // Non-ECH targets are not yet implemented — return a minimal config so the
+  // caller can branch and exit cleanly without asking ECH-specific questions.
+  if (target !== 'elastic-cloud') {
+    return {
+      target,
+      environment: 'prod',
+      config: {
+        name: '',
+        region: '',
+        version: '',
+        spaces: [],
+        dataTypes: {
+          kibanaRepoPath: '',
+          generateAlerts: false,
+          generateCases: false,
+          generateEvents: false,
+        },
+      },
+    };
+  }
+
   // ── Step 1: core deployment settings ──────────────────────────────────────
   const { name, environment } = await inquirer.prompt<{
     name: string;
@@ -180,6 +220,7 @@ export async function runWizard(): Promise<{ config: DeploymentConfig; environme
   }
 
   return {
+    target,
     config: {
       name,
       region,

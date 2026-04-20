@@ -12,6 +12,7 @@ const mockedInquirer = inquirer as jest.Mocked<typeof inquirer>;
 // Build a minimal sequence of mock prompt responses for a happy-path run.
 // Each call to inquirer.prompt() in runWizard is mocked in order.
 function setupPrompts(overrides: {
+  target?: string;
   name?: string;
   environment?: string;
   region?: string;
@@ -23,6 +24,7 @@ function setupPrompts(overrides: {
   additionalDataSpaces?: string[];
 } = {}): void {
   const {
+    target = 'elastic-cloud',
     name = 'my-test-deploy',
     environment = 'prod',
     region = 'gcp-us-central1',
@@ -34,6 +36,8 @@ function setupPrompts(overrides: {
     additionalDataSpaces = [],
   } = overrides;
 
+  // Call 0: target
+  mockedInquirer.prompt.mockResolvedValueOnce({ target });
   // Call 1: name + environment
   mockedInquirer.prompt.mockResolvedValueOnce({ name, environment });
   // Call 2: region
@@ -89,95 +93,95 @@ describe('prompt validator and filter functions', () => {
     };
   }
 
-  // ── Call 0, question 0: deployment name ──────────────────────────────────
+  // ── Call 1, question 0: deployment name ──────────────────────────────────
 
   it('name validate — rejects empty input', () => {
-    const { validate } = getQuestion(0, 0);
+    const { validate } = getQuestion(1, 0);
     expect(validate?.('')).toContain('required');
   });
 
   it('name validate — rejects name with special chars', () => {
-    const { validate } = getQuestion(0, 0);
+    const { validate } = getQuestion(1, 0);
     expect(validate?.('bad name!')).toContain('alphanumeric');
   });
 
   it('name validate — accepts alphanumeric-hyphen name', () => {
-    const { validate } = getQuestion(0, 0);
+    const { validate } = getQuestion(1, 0);
     expect(validate?.('my-deploy-1')).toBe(true);
   });
 
   it('name filter — trims whitespace', () => {
-    const { filter } = getQuestion(0, 0);
+    const { filter } = getQuestion(1, 0);
     expect(filter?.('  trimmed  ')).toBe('trimmed');
   });
 
-  // ── Call 2, question 0: version ──────────────────────────────────────────
+  // ── Call 3, question 0: version ──────────────────────────────────────────
 
   it('version validate — rejects non-semver string', () => {
-    const { validate } = getQuestion(2, 0);
+    const { validate } = getQuestion(3, 0);
     expect(validate?.('not-semver')).toContain('semver');
   });
 
   it('version validate — accepts valid semver', () => {
-    const { validate } = getQuestion(2, 0);
+    const { validate } = getQuestion(3, 0);
     expect(validate?.('8.17.1')).toBe(true);
   });
 
   it('version filter — trims whitespace', () => {
-    const { filter } = getQuestion(2, 0);
+    const { filter } = getQuestion(3, 0);
     expect(filter?.('  8.17.1  ')).toBe('8.17.1');
   });
 
-  // ── Call 3, question 0: spaceCount ───────────────────────────────────────
+  // ── Call 4, question 0: spaceCount ───────────────────────────────────────
 
   it('spaceCount validate — rejects 0', () => {
-    const { validate } = getQuestion(3, 0);
+    const { validate } = getQuestion(4, 0);
     expect(validate?.('0')).toContain('whole number');
   });
 
   it('spaceCount validate — rejects 11', () => {
-    const { validate } = getQuestion(3, 0);
+    const { validate } = getQuestion(4, 0);
     expect(validate?.('11')).toContain('whole number');
   });
 
   it('spaceCount validate — rejects non-integer', () => {
-    const { validate } = getQuestion(3, 0);
+    const { validate } = getQuestion(4, 0);
     expect(validate?.('1.5')).toContain('whole number');
   });
 
   it('spaceCount validate — accepts 1 through 10', () => {
-    const { validate } = getQuestion(3, 0);
+    const { validate } = getQuestion(4, 0);
     expect(validate?.('1')).toBe(true);
     expect(validate?.('10')).toBe(true);
   });
 
   it('spaceCount filter — parses string to number', () => {
-    const { filter } = getQuestion(3, 0);
+    const { filter } = getQuestion(4, 0);
     expect(filter?.('3')).toBe(3);
   });
 
-  // ── Call 4, question 0: spaceName ────────────────────────────────────────
+  // ── Call 5, question 0: spaceName ────────────────────────────────────────
 
   it('spaceName validate — rejects empty string', () => {
-    const { validate } = getQuestion(4, 0);
+    const { validate } = getQuestion(5, 0);
     expect(validate?.('')).toContain('required');
   });
 
   it('spaceName validate — accepts a name not already in the spaces list', () => {
-    const { validate } = getQuestion(4, 0);
+    const { validate } = getQuestion(5, 0);
     // 'Security' is already in the closed-over spaces array from the beforeAll run,
     // so use a different name to test the happy path.
     expect(validate?.('Unique Space Name')).toBe(true);
   });
 
   it('spaceName validate — rejects name that produces a duplicate ID', () => {
-    const { validate } = getQuestion(4, 0);
+    const { validate } = getQuestion(5, 0);
     // 'SECURITY' → nameToId → 'security', which already exists from the beforeAll run
     expect(validate?.('SECURITY')).toContain('already exists');
   });
 
   it('spaceName filter — trims whitespace', () => {
-    const { filter } = getQuestion(4, 0);
+    const { filter } = getQuestion(5, 0);
     expect(filter?.('  Security  ')).toBe('Security');
   });
 
@@ -238,6 +242,31 @@ describe('prompt validator and filter functions', () => {
 });
 
 describe('runWizard', () => {
+  it('returns target: elastic-cloud in the happy-path result', async () => {
+    setupPrompts();
+    const result = await runWizard();
+    expect(result.target).toBe('elastic-cloud');
+  });
+
+  it('returns minimal config immediately for local-stateful', async () => {
+    mockedInquirer.prompt.mockResolvedValueOnce({ target: 'local-stateful' });
+    const result = await runWizard();
+    expect(result.target).toBe('local-stateful');
+    expect(result.config.name).toBe('');
+    expect(result.config.spaces).toHaveLength(0);
+    // Only the target prompt should have fired
+    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns minimal config immediately for local-serverless', async () => {
+    mockedInquirer.prompt.mockResolvedValueOnce({ target: 'local-serverless' });
+    const result = await runWizard();
+    expect(result.target).toBe('local-serverless');
+    expect(result.config.name).toBe('');
+    expect(result.config.spaces).toHaveLength(0);
+    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the deployment config from happy-path answers', async () => {
     setupPrompts();
     const result = await runWizard();
