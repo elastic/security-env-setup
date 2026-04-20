@@ -386,6 +386,15 @@ describe('installPrebuiltRules', () => {
     expect(bootstrapUrl).not.toContain('/s/');
   });
 
+  it('both calls use a 5-minute (300 000 ms) timeout', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    for (const call of mockedAxios.post.mock.calls) {
+      const [, , config] = call as [string, unknown, { timeout: number }];
+      expect(config.timeout).toBe(5 * 60 * 1_000);
+    }
+  });
+
   it('bootstrap failure — throws with bootstrap context and does NOT call perform', async () => {
     const err = { isAxiosError: true, response: { status: 500 }, message: 'Fleet error' };
     mockedAxios.post.mockRejectedValueOnce(err);

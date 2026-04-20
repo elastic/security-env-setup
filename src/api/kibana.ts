@@ -290,23 +290,26 @@ export async function installPrebuiltRules(
   };
   const prefix = buildSpacePrefix(spaceId);
 
-  // Step 1: bootstrap — syncs Fleet packages into Kibana
+  // Step 1: bootstrap — syncs Fleet packages into Kibana.
+  // 5-minute timeout: on a fresh Kibana boot this endpoint can legitimately
+  // take ~28 s while Kibana finishes warming up internally.
   const bootstrapResponse = await axios
     .post<PrebuiltRulesBootstrapResponse>(
       `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/_bootstrap`,
       {},
-      { headers, timeout: REQUEST_TIMEOUT_MS },
+      { headers, timeout: 5 * 60 * 1_000 },
     )
     .catch((err: unknown) =>
       handleKibanaError(err, 'installPrebuiltRules (bootstrap)', kibanaUrl),
     );
 
-  // Step 2: perform installation — installs all available prebuilt rules
+  // Step 2: perform installation — installs all available prebuilt rules.
+  // Same extended timeout: rule installation on a large rule set can be slow.
   const installResponse = await axios
     .post<PrebuiltRulesInstallationResponse>(
       `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/installation/_perform`,
       { mode: 'ALL_RULES' },
-      { headers, timeout: REQUEST_TIMEOUT_MS },
+      { headers, timeout: 5 * 60 * 1_000 },
     )
     .catch((err: unknown) =>
       handleKibanaError(err, 'installPrebuiltRules (perform)', kibanaUrl),
