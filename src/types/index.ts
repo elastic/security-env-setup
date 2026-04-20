@@ -72,3 +72,15 @@ export interface DataGenerationResult {
   casesRan: boolean;
   errors: string[];
 }
+
+export interface InstallPrebuiltRulesResponse {
+  rules_installed: number;
+  rules_updated: number;
+  timelines_installed: number;
+  timelines_updated: number;
+}
+
+export interface BulkRuleActionResponse {
+  success: boolean;
+  rules_count: number;
+}

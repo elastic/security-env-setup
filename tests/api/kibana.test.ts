@@ -10,8 +10,15 @@ import {
   listSpaces,
   deleteSpace,
   initializeSecurityApp,
+  installPrebuiltRules,
+  bulkEnableImmutableRules,
 } from '@api/kibana';
-import type { ElasticCredentials, KibanaSpace } from '@types-local/index';
+import type {
+  BulkRuleActionResponse,
+  ElasticCredentials,
+  InstallPrebuiltRulesResponse,
+  KibanaSpace,
+} from '@types-local/index';
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
@@ -257,5 +264,177 @@ describe('initializeSecurityApp', () => {
       'Kibana API request failed',
     );
     expect(mockSpinner.fail).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// installPrebuiltRules
+// ---------------------------------------------------------------------------
+
+describe('installPrebuiltRules', () => {
+  const INSTALL_RESPONSE: InstallPrebuiltRulesResponse = {
+    rules_installed: 750,
+    rules_updated: 0,
+    timelines_installed: 12,
+    timelines_updated: 0,
+  };
+
+  it('returns the parsed response on success', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+    const result = await installPrebuiltRules(KIBANA_URL, CREDS);
+    expect(result).toEqual(INSTALL_RESPONSE);
+  });
+
+  it('posts to the base path with no space prefix for the default space', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+    await installPrebuiltRules(KIBANA_URL, CREDS, 'default');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/api/detection_engine/rules/prepackaged`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('posts to /s/<id>/api/... for a non-default space', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+    await installPrebuiltRules(KIBANA_URL, CREDS, 'security');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/s/security/api/detection_engine/rules/prepackaged`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('posts to the base path with no space prefix when spaceId is omitted', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/api/detection_engine/rules/prepackaged`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('sends all four required headers', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    const [, , config] = mockedAxios.post.mock.calls[0] as [
+      string,
+      unknown,
+      { headers: Record<string, string> },
+    ];
+    expect(config.headers).toMatchObject({
+      Authorization: expectedBasicAuth(),
+      'Content-Type': 'application/json',
+      'kbn-xsrf': 'true',
+      'x-elastic-internal-origin': 'Kibana',
+      'elastic-api-version': '2023-10-31',
+    });
+  });
+
+  it('throws via handleKibanaError when the request fails', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Server error' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(installPrebuiltRules(KIBANA_URL, CREDS)).rejects.toThrow(
+      'Kibana API request failed',
+    );
+  });
+
+  it('throws Invalid credentials on 401', async () => {
+    const err = { isAxiosError: true, response: { status: 401 }, message: 'Unauthorized' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(installPrebuiltRules(KIBANA_URL, CREDS)).rejects.toThrow('Invalid credentials');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bulkEnableImmutableRules
+// ---------------------------------------------------------------------------
+
+describe('bulkEnableImmutableRules', () => {
+  const BULK_RESPONSE: BulkRuleActionResponse = {
+    success: true,
+    rules_count: 750,
+  };
+
+  it('returns the parsed response on success', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    const result = await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(result).toEqual(BULK_RESPONSE);
+  });
+
+  it('posts to the base path with no space prefix for the default space', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'default');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/api/detection_engine/rules/_bulk_action`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('posts to /s/<id>/api/... for a non-default space', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'security');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/s/security/api/detection_engine/rules/_bulk_action`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('posts to the base path with no space prefix when spaceId is omitted', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/api/detection_engine/rules/_bulk_action`,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('sends the correct query and action in the request body', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    const [, body] = mockedAxios.post.mock.calls[0] as [string, Record<string, string>];
+    expect(body).toEqual({
+      query: 'alert.attributes.params.immutable: true',
+      action: 'enable',
+    });
+  });
+
+  it('sends all four required headers', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    const [, , config] = mockedAxios.post.mock.calls[0] as [
+      string,
+      unknown,
+      { headers: Record<string, string> },
+    ];
+    expect(config.headers).toMatchObject({
+      Authorization: expectedBasicAuth(),
+      'Content-Type': 'application/json',
+      'kbn-xsrf': 'true',
+      'x-elastic-internal-origin': 'Kibana',
+      'elastic-api-version': '2023-10-31',
+    });
+  });
+
+  it('throws via handleKibanaError when the request fails', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Server error' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow(
+      'Kibana API request failed',
+    );
+  });
+
+  it('throws Invalid credentials on 401', async () => {
+    const err = { isAxiosError: true, response: { status: 401 }, message: 'Unauthorized' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow('Invalid credentials');
   });
 });

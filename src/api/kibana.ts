@@ -1,6 +1,11 @@
 import axios from 'axios';
 import ora from 'ora';
-import type { ElasticCredentials, KibanaSpace } from '../types';
+import type {
+  BulkRuleActionResponse,
+  ElasticCredentials,
+  InstallPrebuiltRulesResponse,
+  KibanaSpace,
+} from '../types';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
 
@@ -99,6 +104,15 @@ function handleKibanaError(err: unknown, context: string, kibanaUrl: string): ne
     }
   }
   throw new Error(`${context}: ${getErrorMessage(err)}`);
+}
+
+/**
+ * Returns the Kibana URL path prefix for the given space.
+ * The default space has no prefix; all other spaces use `/s/<id>`.
+ */
+function buildSpacePrefix(spaceId?: string): string {
+  if (!spaceId || spaceId === 'default') return '';
+  return `/s/${spaceId}`;
 }
 
 /** Maps a raw Kibana API space shape to the canonical `KibanaSpace` type. */
@@ -237,6 +251,64 @@ export async function deleteSpace(
       }
       handleKibanaError(err, 'deleteSpace', kibanaUrl);
     });
+}
+
+/**
+ * Installs (or updates) all Elastic prebuilt detection rules for the given space.
+ * Posts to `/api/detection_engine/rules/prepackaged` with the four headers
+ * required by the detection-engine API.
+ */
+export async function installPrebuiltRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<InstallPrebuiltRulesResponse> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+
+  try {
+    const response = await axios.post<InstallPrebuiltRulesResponse>(
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/prepackaged`,
+      {},
+      { headers, timeout: REQUEST_TIMEOUT_MS },
+    );
+    return response.data;
+  } catch (err) {
+    handleKibanaError(err, 'installPrebuiltRules', kibanaUrl);
+  }
+}
+
+/**
+ * Bulk-enables all immutable (prebuilt) detection rules for the given space.
+ * Posts to `/api/detection_engine/rules/_bulk_action` with the four headers
+ * required by the detection-engine API.
+ */
+export async function bulkEnableImmutableRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<BulkRuleActionResponse> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+
+  try {
+    const response = await axios.post<BulkRuleActionResponse>(
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`,
+      { query: 'alert.attributes.params.immutable: true', action: 'enable' },
+      { headers, timeout: REQUEST_TIMEOUT_MS },
+    );
+    return response.data;
+  } catch (err) {
+    handleKibanaError(err, 'bulkEnableImmutableRules', kibanaUrl);
+  }
 }
 
 /**
