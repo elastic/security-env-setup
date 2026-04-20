@@ -39,7 +39,13 @@ TypeScript fits this use case better than Go because the npm ecosystem already c
 
 **Debugging the flat resources array bug.** The `POST /api/v1/deployments` response returns `resources` as a flat array with a `kind` discriminant — not as an object keyed by resource type. Claude Code traced the credential flow from `createDeployment` through `waitForDeployment` to `createSpaces`, identified exactly where `password` was being extracted from the wrong shape, and rewrote the `CreateDeploymentApiResponse` interface and extraction line in one pass.
 
-**Writing 199 tests with 86%+ branch coverage.** Starting from ~80% coverage, Claude Code identified uncovered branches from Istanbul output, wrote targeted tests for each one — validator callbacks extracted from `inquirer.prompt` call arguments, `shouldRetry` logic in the polling loop, error path edge cases in script runners — and updated mocks whenever the underlying interface changed.
+**Writing 254 tests with 86%+ branch coverage.** Starting from ~80% coverage, Claude Code identified uncovered branches from Istanbul output, wrote targeted tests for each one — validator callbacks extracted from `inquirer.prompt` call arguments, `shouldRetry` logic in the polling loop, error path edge cases in script runners — and updated mocks whenever the underlying interface changed.
+
+**Debugging multiple real API issues against live deployments.** Running the tool against production Cloud deployments surfaced a series of runtime failures that static analysis could not catch: the `resources` array using a flat `kind` discriminant instead of keyed object fields; `generate_cli.js` reading `--password` from CLI flags rather than the `ELASTICSEARCH_PASSWORD` environment variable; trailing slashes being re-added by `new URL().toString()` after normalization; port 443 needing replacement with 9243 for `yarn test:generate`'s internal proxy; and `NODE_TLS_REJECT_UNAUTHORIZED=0` causing the test:generate script to print a warning and terminate immediately. Each was diagnosed from error output and fixed in a single targeted edit.
+
+**Implementing surgical yarn cache recovery.** When `yarn kbn bootstrap` fails with an integrity-check error, the tool automatically cleans the specific failing package's cache and retries. If a second integrity error occurs, it wipes the full yarn cache as a last resort. Non-integrity failures throw immediately without any cache mutation. This three-attempt strategy avoids unnecessary full-cache destruction on the first error.
+
+**Multi-space data generation with user-controlled space selection.** After the Kibana repo path prompt, a checkbox prompt lets the user pick which additional spaces receive data. Attacks and cases run per-space (cases use a reduced count of 300 to stay within time budgets); events run once against the default space only. Individual space failures are caught and warned without aborting the remaining spaces.
 
 **Iterating on review feedback.** After each round of pull request feedback, Claude Code applied corrections (unused imports, missing edge-case tests, inconsistent error messages) without touching unrelated code. The constraint "only change what was asked" was respected throughout.
 
@@ -68,24 +74,35 @@ node dist/index.js create
 ## Example Output
 
 ```
-[2/5] Creating deployment "security-test-1234" on prod…
+[1/5] Running deployment wizard…
+[2/5] Creating deployment "sec-final-demo" on prod…
 [3/5] Waiting for deployment to become healthy…
 ✔ Deployment is healthy and running.
 [4/5] Creating Kibana spaces…
 ✔ Space "Security" created successfully.
+✔ Space "Staging" created successfully.
 [5/5] Initializing Security Solution…
 ✔ Security Solution index initialized successfully.
+Kibana dependencies not found. Running yarn kbn bootstrap — this may take 20-40 minutes...
+Done in 14.36s.
+Bootstrapping Kibana — done
+✔ Generating alerts & attack discoveries — done
+Generating events — done
+✔ Generating cases — done
+✔ Generating alerts & attack discoveries — done (space: security)
+✔ Generating cases — done (space: security)
 
 ────────────────────────────────────────────────────────────
   Deployment Ready
 ────────────────────────────────────────────────────────────
-  Name          security-test-1234
+  Name          sec-final-demo
   Environment   prod
-  Kibana        https://5cdff87635c34d638858c14a2b5de497.kb.us-west2.gcp.elastic-cloud.com:443
-  Elasticsearch https://a0e8836c1a784867a42e3ed4fef04418.es.us-west2.gcp.elastic-cloud.com:443
+  Kibana        https://a86ee5dac90347098786348e1a394a31.us-west2.gcp.elastic-cloud.com:443
+  Elasticsearch https://c1eed76c8e424c378e3117f8b977de78.us-west2.gcp.elastic-cloud.com:443
   Username      elastic
   Password      ••••••••••••••••••••
-  Spaces        Security
+  Spaces        Security, Staging
+  Data spaces   default, security
 ────────────────────────────────────────────────────────────
   Keep your password safe — it will not be shown again.
 ```
@@ -118,14 +135,13 @@ node dist/index.js auth logout
 
 ### `create`
 
-Starts the interactive wizard:
+Starts the interactive five-step wizard:
 
 1. **Deployment name and environment** — alphanumeric + hyphens, targeting prod / qa / staging
 2. **Region** — filtered to regions available in the selected environment
 3. **Stack version** — semver, defaults to `8.17.1`
 4. **Kibana spaces** — 1–10 spaces, names converted to hyphenated IDs
-5. **Sample data** — optionally select Alerts + Attack Discoveries, Cases, and/or Events
-6. **Kibana repo path (conditional)** — shown only when sample data is selected; leave empty to skip data generation
+5. **Sample data** — optionally generate Alerts + Attack Discoveries, Cases, and/or Events using scripts from a local Kibana repo. When a repo path is provided and at least one non-default space exists, a follow-up prompt asks **"Also generate data in additional spaces?"** — a checkbox list of the created spaces. Selected spaces receive attacks and cases; events (`yarn test:generate`) always run once for the default space only. Cases use a count of 1000 in the default space and 300 in each additional space.
 
 ```bash
 node dist/index.js create
@@ -142,7 +158,7 @@ src/
     kibana.ts     — Kibana Spaces API and Security Solution initialization
   commands/
     auth.ts       — auth login / status / logout command handlers
-    create.ts     — create command; orchestrates the wizard flow
+    create.ts     — create command; orchestrates all five steps
   wizard/
     prompts.ts    — interactive inquirer prompts with inline validation
   runners/
@@ -150,8 +166,9 @@ src/
                     detects new vs. old plugin directory layout automatically;
                     passes credentials via environment variables, never CLI args
   config/
-    store.ts      — reads and writes API keys to ~/.security-env-setup/config.json
+    store.ts      — reads and writes API keys to ~/.config/security-env-setup/config.json
     endpoints.ts  — maps environment names to Elastic Cloud API base URLs
+    regions.ts    — available regions per environment (extracted from cloud.ts for clean layer separation)
   utils/
     errors.ts     — normalises unknown thrown values to strings
     http.ts       — builds Elastic Cloud ApiKey authorization headers
@@ -161,6 +178,12 @@ src/
 
 The deployment payload is built using hardcoded but API-verified instance configuration IDs per cloud provider (GCP, AWS, Azure). The `gcp-storage-optimized` deployment template ID is used for all providers — the name is misleading; it is the template the API accepts.
 
+## Known Limitations
+
+- **Alerts in additional spaces:** `generate_cli.js --attacks` generates alerts via rule preview and copies them to the default space. When run against a custom space, the 15 prebuilt rules are installed and enabled but alerts may not appear immediately — the rules need to execute against existing data. Alerts in the default space are always generated correctly.
+- **Events (yarn test:generate) are default-space only:** The resolver generator script does not support `--spaceId`. Events are always generated in the default space regardless of the additional spaces selection.
+- **Kibana bootstrap required:** Data generation requires a local Kibana repository with `yarn kbn bootstrap` completed. The tool handles this automatically, including yarn cache recovery on integrity errors.
+
 ## Running Tests
 
 ```bash
@@ -168,7 +191,7 @@ npm test
 npm test -- --coverage
 ```
 
-199 tests across 12 test suites. Branch coverage is above 86%.
+254 tests across 12 test suites. Branch coverage is above 86%.
 
 Test patterns used throughout:
 - Validator and filter functions are extracted from `inquirer.prompt` call arguments and tested directly, bypassing the mock
