@@ -3,8 +3,10 @@ import ora from 'ora';
 import type {
   BulkRuleActionResponse,
   ElasticCredentials,
-  InstallPrebuiltRulesResponse,
+  InstallPrebuiltRulesResult,
   KibanaSpace,
+  PrebuiltRulesBootstrapResponse,
+  PrebuiltRulesInstallationResponse,
 } from '../types';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
@@ -254,32 +256,54 @@ export async function deleteSpace(
 }
 
 /**
- * Installs (or updates) all Elastic prebuilt detection rules for the given space.
- * Posts to `/api/detection_engine/rules/prepackaged` with the four headers
- * required by the detection-engine API.
+ * Installs all Elastic prebuilt detection rules for the given space using the
+ * two-step internal API introduced in Kibana 8.14+ (the legacy
+ * `/api/detection_engine/rules/prepackaged` endpoint was removed in 9.x).
+ *
+ * Step 1 — `_bootstrap`: syncs Fleet packages into Kibana.
+ * Step 2 — `_perform_installation`: installs all available prebuilt rules.
+ *
+ * Both endpoints require `elastic-api-version: '1'` (internal versioning —
+ * distinct from the public `2023-10-31` version used by other endpoints).
  */
 export async function installPrebuiltRules(
   kibanaUrl: string,
   credentials: ElasticCredentials,
   spaceId?: string,
-): Promise<InstallPrebuiltRulesResponse> {
+): Promise<InstallPrebuiltRulesResult> {
   const headers = {
     ...buildKibanaHeaders(credentials),
     'x-elastic-internal-origin': 'Kibana',
-    'elastic-api-version': '2023-10-31',
+    'elastic-api-version': '1',
   };
   const prefix = buildSpacePrefix(spaceId);
 
-  try {
-    const response = await axios.post<InstallPrebuiltRulesResponse>(
-      `${kibanaUrl}${prefix}/api/detection_engine/rules/prepackaged`,
+  // Step 1: bootstrap — syncs Fleet packages into Kibana
+  const bootstrapResponse = await axios
+    .post<PrebuiltRulesBootstrapResponse>(
+      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/_bootstrap`,
       {},
       { headers, timeout: REQUEST_TIMEOUT_MS },
+    )
+    .catch((err: unknown) =>
+      handleKibanaError(err, 'installPrebuiltRules (bootstrap)', kibanaUrl),
     );
-    return response.data;
-  } catch (err) {
-    handleKibanaError(err, 'installPrebuiltRules', kibanaUrl);
-  }
+
+  // Step 2: perform installation — installs all available prebuilt rules
+  const installResponse = await axios
+    .post<PrebuiltRulesInstallationResponse>(
+      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/_perform_installation`,
+      { mode: 'ALL_RULES' },
+      { headers, timeout: REQUEST_TIMEOUT_MS },
+    )
+    .catch((err: unknown) =>
+      handleKibanaError(err, 'installPrebuiltRules (perform)', kibanaUrl),
+    );
+
+  return {
+    packages: [...bootstrapResponse.data.packages],
+    summary: installResponse.data.summary,
+  };
 }
 
 /**

@@ -106,10 +106,8 @@ beforeEach(() => {
   });
   mockedInitializeSecurityApp.mockResolvedValue(undefined);
   mockedInstallPrebuiltRules.mockResolvedValue({
-    rules_installed: 5,
-    rules_updated: 0,
-    timelines_installed: 0,
-    timelines_updated: 0,
+    packages: [{ name: 'security_detection_engine', version: '9.3.8', status: 'installed' }],
+    summary: { total: 1779, succeeded: 1779, skipped: 0, failed: 0 },
   });
   mockedBulkEnableImmutableRules.mockResolvedValue({
     success: true,
@@ -180,6 +178,19 @@ describe('runLocalFlow — happy path (default space, no sample data)', () => {
     await runLocalFlow(BASE_ANSWERS);
     expect(mockedInstallPrebuiltRules).toHaveBeenCalledTimes(1);
     expect(mockedBulkEnableImmutableRules).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs the succeeded/total rule count and Fleet package count after install', async () => {
+    await runLocalFlow(BASE_ANSWERS);
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('1779/1779');
+    expect(output).toContain('1 Fleet packages synced');
+  });
+
+  it('logs the enabled rules count after bulk enable', async () => {
+    await runLocalFlow(BASE_ANSWERS);
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Enabled 5 immutable rules');
   });
 
   it('calls runKibanaLocalGenerator with volume data', async () => {

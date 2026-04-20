@@ -73,11 +73,34 @@ export interface DataGenerationResult {
   errors: string[];
 }
 
-export interface InstallPrebuiltRulesResponse {
-  rules_installed: number;
-  rules_updated: number;
-  timelines_installed: number;
-  timelines_updated: number;
+export interface PrebuiltRulesBootstrapPackage {
+  name: string;
+  version: string;
+  status: string;
+}
+
+export interface PrebuiltRulesBootstrapResponse {
+  packages: readonly PrebuiltRulesBootstrapPackage[];
+}
+
+export interface PrebuiltRulesInstallationSummary {
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface PrebuiltRulesInstallationResponse {
+  summary: PrebuiltRulesInstallationSummary;
+}
+
+/**
+ * Aggregated result of the two-step prebuilt rules install flow
+ * (bootstrap packages + perform installation).
+ */
+export interface InstallPrebuiltRulesResult {
+  packages: readonly PrebuiltRulesBootstrapPackage[];
+  summary: PrebuiltRulesInstallationSummary;
 }
 
 export interface BulkRuleActionResponse {

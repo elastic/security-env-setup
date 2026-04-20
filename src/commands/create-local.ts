@@ -193,11 +193,11 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     spaceArg,
   );
   logger.info(
-    `Prebuilt rules: ${String(installResult.rules_installed)} installed, ` +
-      `${String(installResult.rules_updated)} updated.`,
+    `Installed ${String(installResult.summary.succeeded)}/${String(installResult.summary.total)} prebuilt rules ` +
+      `(${String(installResult.packages.length)} Fleet packages synced).`,
   );
-  await bulkEnableImmutableRules(answers.kibanaUrl, credentials, spaceArg);
-  logger.info('All immutable rules enabled.');
+  const enableResult = await bulkEnableImmutableRules(answers.kibanaUrl, credentials, spaceArg);
+  logger.info(`Enabled ${String(enableResult.rules_count)} immutable rules.`);
 
   // ── Step 8/10: Kibana internal generator ──────────────────────────────────
   logger.step(8, TOTAL_STEPS, 'Running Kibana internal data generator…');

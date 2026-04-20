@@ -17,8 +17,10 @@ import {
 import type {
   BulkRuleActionResponse,
   ElasticCredentials,
-  InstallPrebuiltRulesResponse,
+  InstallPrebuiltRulesResult,
   KibanaSpace,
+  PrebuiltRulesBootstrapResponse,
+  PrebuiltRulesInstallationResponse,
 } from '@types-local/index';
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -273,80 +275,146 @@ describe('initializeSecurityApp', () => {
 // ---------------------------------------------------------------------------
 
 describe('installPrebuiltRules', () => {
-  const INSTALL_RESPONSE: InstallPrebuiltRulesResponse = {
-    rules_installed: 750,
-    rules_updated: 0,
-    timelines_installed: 12,
-    timelines_updated: 0,
+  const BOOTSTRAP_RESPONSE: PrebuiltRulesBootstrapResponse = {
+    packages: [
+      { name: 'security_detection_engine', version: '9.3.8', status: 'installed' },
+      { name: 'endpoint', version: '9.4.0', status: 'installed' },
+      { name: 'security_ai_prompts', version: '1.0.13', status: 'installed' },
+    ],
   };
 
-  it('returns the parsed response on success', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+  const INSTALL_RESPONSE: PrebuiltRulesInstallationResponse = {
+    summary: { total: 1779, succeeded: 1779, skipped: 0, failed: 0 },
+  };
+
+  const EXPECTED_RESULT: InstallPrebuiltRulesResult = {
+    packages: [...BOOTSTRAP_RESPONSE.packages],
+    summary: INSTALL_RESPONSE.summary,
+  };
+
+  /** Prime the mock for both sequential POST calls. */
+  function mockBothCalls(): void {
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: BOOTSTRAP_RESPONSE })
+      .mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+  }
+
+  it('returns the aggregated InstallPrebuiltRulesResult on success', async () => {
+    mockBothCalls();
     const result = await installPrebuiltRules(KIBANA_URL, CREDS);
-    expect(result).toEqual(INSTALL_RESPONSE);
+    expect(result).toEqual(EXPECTED_RESULT);
   });
 
-  it('posts to the base path with no space prefix for the default space', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+  it('makes exactly two POST calls', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('first call posts to _bootstrap with empty body', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    const [url, body] = mockedAxios.post.mock.calls[0] as [string, unknown];
+    expect(url).toContain('/internal/detection_engine/prebuilt_rules/_bootstrap');
+    expect(body).toEqual({});
+  });
+
+  it('second call posts to _perform_installation with mode ALL_RULES', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    const [url, body] = mockedAxios.post.mock.calls[1] as [string, unknown];
+    expect(url).toContain('/internal/detection_engine/prebuilt_rules/_perform_installation');
+    expect(body).toEqual({ mode: 'ALL_RULES' });
+  });
+
+  it('uses elastic-api-version: "1" (not "2023-10-31") on both calls', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    for (const call of mockedAxios.post.mock.calls) {
+      const [, , config] = call as [string, unknown, { headers: Record<string, string> }];
+      expect(config.headers['elastic-api-version']).toBe('1');
+      expect(config.headers['elastic-api-version']).not.toBe('2023-10-31');
+    }
+  });
+
+  it('sends all required headers on both calls', async () => {
+    mockBothCalls();
+    await installPrebuiltRules(KIBANA_URL, CREDS);
+    for (const call of mockedAxios.post.mock.calls) {
+      const [, , config] = call as [string, unknown, { headers: Record<string, string> }];
+      expect(config.headers).toMatchObject({
+        Authorization: expectedBasicAuth(),
+        'Content-Type': 'application/json',
+        'kbn-xsrf': 'true',
+        'x-elastic-internal-origin': 'Kibana',
+        'elastic-api-version': '1',
+      });
+    }
+  });
+
+  it('default space — both URLs have no space prefix', async () => {
+    mockBothCalls();
     await installPrebuiltRules(KIBANA_URL, CREDS, 'default');
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/api/detection_engine/rules/prepackaged`,
-      expect.anything(),
-      expect.anything(),
+    const [bootstrapUrl] = mockedAxios.post.mock.calls[0] as [string];
+    const [performUrl] = mockedAxios.post.mock.calls[1] as [string];
+    expect(bootstrapUrl).toBe(
+      `${KIBANA_URL}/internal/detection_engine/prebuilt_rules/_bootstrap`,
+    );
+    expect(performUrl).toBe(
+      `${KIBANA_URL}/internal/detection_engine/prebuilt_rules/_perform_installation`,
     );
   });
 
-  it('posts to /s/<id>/api/... for a non-default space', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+  it('custom space — both URLs include the /s/<id> prefix', async () => {
+    mockBothCalls();
     await installPrebuiltRules(KIBANA_URL, CREDS, 'security');
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/s/security/api/detection_engine/rules/prepackaged`,
-      expect.anything(),
-      expect.anything(),
+    const [bootstrapUrl] = mockedAxios.post.mock.calls[0] as [string];
+    const [performUrl] = mockedAxios.post.mock.calls[1] as [string];
+    expect(bootstrapUrl).toBe(
+      `${KIBANA_URL}/s/security/internal/detection_engine/prebuilt_rules/_bootstrap`,
+    );
+    expect(performUrl).toBe(
+      `${KIBANA_URL}/s/security/internal/detection_engine/prebuilt_rules/_perform_installation`,
     );
   });
 
-  it('posts to the base path with no space prefix when spaceId is omitted', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
+  it('omitted spaceId — URLs have no space prefix', async () => {
+    mockBothCalls();
     await installPrebuiltRules(KIBANA_URL, CREDS);
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/api/detection_engine/rules/prepackaged`,
-      expect.anything(),
-      expect.anything(),
-    );
+    const [bootstrapUrl] = mockedAxios.post.mock.calls[0] as [string];
+    expect(bootstrapUrl).toContain(`${KIBANA_URL}/internal/`);
+    expect(bootstrapUrl).not.toContain('/s/');
   });
 
-  it('sends all four required headers', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: INSTALL_RESPONSE });
-    await installPrebuiltRules(KIBANA_URL, CREDS);
-    const [, , config] = mockedAxios.post.mock.calls[0] as [
-      string,
-      unknown,
-      { headers: Record<string, string> },
-    ];
-    expect(config.headers).toMatchObject({
-      Authorization: expectedBasicAuth(),
-      'Content-Type': 'application/json',
-      'kbn-xsrf': 'true',
-      'x-elastic-internal-origin': 'Kibana',
-      'elastic-api-version': '2023-10-31',
-    });
-  });
-
-  it('throws via handleKibanaError when the request fails', async () => {
-    const err = { isAxiosError: true, response: { status: 500 }, message: 'Server error' };
+  it('bootstrap failure — throws with bootstrap context and does NOT call perform', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Fleet error' };
     mockedAxios.post.mockRejectedValueOnce(err);
     mockedAxios.isAxiosError.mockReturnValue(true);
+
     await expect(installPrebuiltRules(KIBANA_URL, CREDS)).rejects.toThrow(
-      'Kibana API request failed',
+      'installPrebuiltRules (bootstrap)',
     );
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
   });
 
-  it('throws Invalid credentials on 401', async () => {
+  it('bootstrap 401 — throws Invalid credentials', async () => {
     const err = { isAxiosError: true, response: { status: 401 }, message: 'Unauthorized' };
     mockedAxios.post.mockRejectedValueOnce(err);
     mockedAxios.isAxiosError.mockReturnValue(true);
     await expect(installPrebuiltRules(KIBANA_URL, CREDS)).rejects.toThrow('Invalid credentials');
+  });
+
+  it('bootstrap succeeds but perform fails — throws with perform context', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Install error' };
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: BOOTSTRAP_RESPONSE })
+      .mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+
+    await expect(installPrebuiltRules(KIBANA_URL, CREDS)).rejects.toThrow(
+      'installPrebuiltRules (perform)',
+    );
+    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
   });
 });
 
