@@ -109,11 +109,8 @@ beforeEach(() => {
     packages: [{ name: 'security_detection_engine', version: '9.3.8', status: 'installed' }],
     summary: { total: 1779, succeeded: 1779, skipped: 0, failed: 0 },
   });
-  mockedBulkEnableImmutableRules.mockResolvedValue({
-    total: 2038,
-    enabled: 2038,
-    chunks: 3,
-  });
+  // bulkEnableImmutableRules is no longer called by the local flow;
+  // no default mock value needed — asserting it is never called.
   mockedRunKibanaLocalGenerator.mockResolvedValue(undefined);
   mockedEnsureRepoCloned.mockResolvedValue(undefined);
   mockedWriteConfig.mockResolvedValue(undefined);
@@ -175,10 +172,10 @@ describe('runLocalFlow — happy path (default space, no sample data)', () => {
     );
   });
 
-  it('calls installPrebuiltRules and bulkEnableImmutableRules', async () => {
+  it('calls installPrebuiltRules but NOT bulkEnableImmutableRules', async () => {
     await runLocalFlow(BASE_ANSWERS);
     expect(mockedInstallPrebuiltRules).toHaveBeenCalledTimes(1);
-    expect(mockedBulkEnableImmutableRules).toHaveBeenCalledTimes(1);
+    expect(mockedBulkEnableImmutableRules).not.toHaveBeenCalled();
   });
 
   it('logs the succeeded/total rule count and Fleet package count after install', async () => {
@@ -188,11 +185,18 @@ describe('runLocalFlow — happy path (default space, no sample data)', () => {
     expect(output).toContain('1 Fleet packages synced');
   });
 
-  it('logs the enabled/total count and batch count after bulk enable', async () => {
+  it('logs the "Rules are installed but NOT enabled" notice', async () => {
     await runLocalFlow(BASE_ANSWERS);
     const output = consoleSpy.mock.calls.flat().join('\n');
-    expect(output).toContain('2038/2038');
-    expect(output).toContain('3 batches');
+    expect(output).toContain('NOT enabled');
+    expect(output).toContain('Rules');
+  });
+
+  it('includes the installed rule count in the final summary', async () => {
+    await runLocalFlow(BASE_ANSWERS);
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('1779');
+    expect(output).toContain('enable from Rules UI');
   });
 
   it('calls runKibanaLocalGenerator with volume data', async () => {

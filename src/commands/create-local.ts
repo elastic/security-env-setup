@@ -6,7 +6,6 @@ import {
   createSpace,
   initializeSecurityApp,
   installPrebuiltRules,
-  bulkEnableImmutableRules,
   installSampleData,
 } from '../api/kibana';
 import { ensureServicesRunning } from '../runners/local-services';
@@ -41,6 +40,7 @@ const SAMPLE_DATASETS: ReadonlyArray<'flights' | 'ecommerce' | 'logs'> = [
 function printLocalSummary(
   answers: LocalWizardAnswers,
   startMethod: AutoStartResult['method'],
+  rulesInstalled: number,
 ): void {
   const {
     target,
@@ -71,6 +71,9 @@ function printLocalSummary(
   logger.print(`  ${label('Space')}${value(space)}`);
   logger.print(`  ${label('Volume')}${value(volume)}`);
   logger.print(`  ${label('Sample data')}${value(sampleDataFlag ? 'installed' : 'skipped')}`);
+  logger.print(
+    `  ${label('Rules')}${value(`${String(rulesInstalled)} installed (enable from Rules UI)`)}`,
+  );
   logger.print(`  ${label('docs-generator')}${value(docsGeneratorDir)}`);
   logger.print('');
   logger.print(`  ${chalk.bold.white('Verify at:')}`);
@@ -186,7 +189,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
   await initializeSecurityApp(answers.kibanaUrl, credentials);
 
   // ── Step 7/10: Prebuilt rules ─────────────────────────────────────────────
-  logger.step(7, TOTAL_STEPS, 'Installing and enabling prebuilt detection rules…');
+  logger.step(7, TOTAL_STEPS, 'Installing prebuilt detection rules…');
   const installResult = await installPrebuiltRules(
     answers.kibanaUrl,
     credentials,
@@ -196,10 +199,8 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     `Installed ${String(installResult.summary.succeeded)}/${String(installResult.summary.total)} prebuilt rules ` +
       `(${String(installResult.packages.length)} Fleet packages synced).`,
   );
-  const enableResult = await bulkEnableImmutableRules(answers.kibanaUrl, credentials, spaceArg);
   logger.info(
-    `Enabled ${String(enableResult.enabled)}/${String(enableResult.total)} immutable rules ` +
-      `(${String(enableResult.chunks)} batches).`,
+    'Rules are installed but NOT enabled. Open Kibana → Security → Rules to enable the ones you need.',
   );
 
   // ── Step 8/10: Kibana internal generator ──────────────────────────────────
@@ -235,5 +236,5 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
 
   // ── Step 10/10: Summary ───────────────────────────────────────────────────
   logger.step(10, TOTAL_STEPS, 'Done!');
-  printLocalSummary(answers, autoStart.method);
+  printLocalSummary(answers, autoStart.method, installResult.summary.succeeded);
 }
