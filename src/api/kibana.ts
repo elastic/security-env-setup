@@ -292,7 +292,7 @@ export async function installPrebuiltRules(
   // Step 2: perform installation — installs all available prebuilt rules
   const installResponse = await axios
     .post<PrebuiltRulesInstallationResponse>(
-      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/_perform_installation`,
+      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/installation/_perform`,
       { mode: 'ALL_RULES' },
       { headers, timeout: REQUEST_TIMEOUT_MS },
     )

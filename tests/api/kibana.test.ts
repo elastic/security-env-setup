@@ -319,11 +319,11 @@ describe('installPrebuiltRules', () => {
     expect(body).toEqual({});
   });
 
-  it('second call posts to _perform_installation with mode ALL_RULES', async () => {
+  it('second call posts to installation/_perform with mode ALL_RULES', async () => {
     mockBothCalls();
     await installPrebuiltRules(KIBANA_URL, CREDS);
     const [url, body] = mockedAxios.post.mock.calls[1] as [string, unknown];
-    expect(url).toContain('/internal/detection_engine/prebuilt_rules/_perform_installation');
+    expect(url).toContain('/internal/detection_engine/prebuilt_rules/installation/_perform');
     expect(body).toEqual({ mode: 'ALL_RULES' });
   });
 
@@ -361,7 +361,7 @@ describe('installPrebuiltRules', () => {
       `${KIBANA_URL}/internal/detection_engine/prebuilt_rules/_bootstrap`,
     );
     expect(performUrl).toBe(
-      `${KIBANA_URL}/internal/detection_engine/prebuilt_rules/_perform_installation`,
+      `${KIBANA_URL}/internal/detection_engine/prebuilt_rules/installation/_perform`,
     );
   });
 
@@ -374,7 +374,7 @@ describe('installPrebuiltRules', () => {
       `${KIBANA_URL}/s/security/internal/detection_engine/prebuilt_rules/_bootstrap`,
     );
     expect(performUrl).toBe(
-      `${KIBANA_URL}/s/security/internal/detection_engine/prebuilt_rules/_perform_installation`,
+      `${KIBANA_URL}/s/security/internal/detection_engine/prebuilt_rules/installation/_perform`,
     );
   });
 
