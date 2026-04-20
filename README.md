@@ -168,7 +168,7 @@ src/
   config/
     store.ts      — reads and writes API keys to ~/.config/security-env-setup/config.json
     endpoints.ts  — maps environment names to Elastic Cloud API base URLs
-    regions.ts    — available regions per environment (extracted from cloud.ts for clean layer separation)
+  regions.ts      — available regions per environment (extracted from cloud.ts for clean layer separation)
   utils/
     errors.ts     — normalises unknown thrown values to strings
     http.ts       — builds Elastic Cloud ApiKey authorization headers
