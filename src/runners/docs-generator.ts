@@ -2,6 +2,7 @@ import fs from 'fs';
 import { writeFile } from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
+import * as inquirer from 'inquirer';
 import type {
   DocsGeneratorConfigOptions,
   ElasticCredentials,
@@ -10,6 +11,11 @@ import type {
 import { VOLUME_PRESETS } from '../config/volume-presets';
 import { getErrorMessage } from '../utils/errors';
 import logger from '../utils/logger';
+import {
+  listNvmNodeVersions,
+  findNode24OrNewer,
+  type NvmNodeVersion,
+} from '../utils/node-version';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -96,6 +102,16 @@ function runCommand(
 }
 
 /**
+ * Builds the bash `-c` script that sources nvm, switches to the repo's
+ * required Node version, then runs yarn with the given args. Extracted so
+ * both {@link runWithNvm} and {@link ensureNode24Installed} can reuse it.
+ */
+function buildNvmBashCommand(nvmDir: string, yarnArgs: string[]): string {
+  const argsEscaped = yarnArgs.map(shellQuote).join(' ');
+  return `source "${nvmDir}/nvm.sh" && nvm use >/dev/null 2>&1 && yarn ${argsEscaped}`;
+}
+
+/**
  * Runs a yarn command inside `dir` using nvm to switch to the repo's required
  * Node version. Falls back to the Node currently on PATH when nvm is absent,
  * logging a warning so the operator knows which Node version is being used.
@@ -104,9 +120,7 @@ async function runWithNvm(dir: string, yarnArgs: string[]): Promise<void> {
   const nvmDir = resolveNvmDir();
 
   if (nvmDir !== undefined) {
-    const argsEscaped = yarnArgs.map(shellQuote).join(' ');
-    const cmd =
-      `source "${nvmDir}/nvm.sh" && nvm use >/dev/null 2>&1 && yarn ${argsEscaped}`;
+    const cmd = buildNvmBashCommand(nvmDir, yarnArgs);
     const env: NodeJS.ProcessEnv = { ...process.env, NVM_DIR: nvmDir };
     await runCommand('bash', ['-c', cmd], dir, env);
   } else {
@@ -243,7 +257,7 @@ export async function runStandardSequence(
 ): Promise<void> {
   const preset = VOLUME_PRESETS[options.volume];
 
-  const commands: ReadonlyArray<string[]> = [
+  const commands: ReadonlyArray<[string, ...string[]]> = [
     [
       'org-data',
       '--size', preset.orgSize,
@@ -267,7 +281,68 @@ export async function runStandardSequence(
   ];
 
   for (const cmd of commands) {
-    const name = cmd[0] ?? 'unknown';
-    await runDocsGeneratorCommand(dir, cmd, name);
+    await runDocsGeneratorCommand(dir, cmd, cmd[0]);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Node 24 preflight check
+// ---------------------------------------------------------------------------
+
+const NODE24_REQUIRED_MSG =
+  "Node 24 is required for security-documents-generator. " +
+  "Run 'nvm install 24' manually and re-launch the CLI. " +
+  "Aborting local setup.";
+
+/**
+ * Verifies that Node 24 (or newer) is available through nvm.
+ *
+ * - If already installed: logs at info level and returns the version.
+ * - If absent: lists installed versions, asks the operator whether to install
+ *   via `nvm install 24`, runs the install if confirmed, then re-checks.
+ * - Throws with a descriptive message if the operator declines or if the
+ *   re-check still finds no Node 24+.
+ */
+export async function ensureNode24Installed(): Promise<NvmNodeVersion> {
+  const versions = await listNvmNodeVersions();
+  const found = findNode24OrNewer(versions);
+
+  if (found !== undefined) {
+    logger.info(`Node ${found.raw} found via nvm — preflight check passed.`);
+    return found;
+  }
+
+  const installedList =
+    versions.length > 0 ? versions.map((v) => v.raw).join(', ') : '(none)';
+  logger.warn(`Node 24+ not found. nvm-managed versions: ${installedList}`);
+
+  const answer = await inquirer.prompt<{ install: boolean }>([
+    {
+      type: 'confirm',
+      name: 'install',
+      message: 'Node 24 is required. Install it now via nvm?',
+      default: true,
+    },
+  ]);
+
+  if (!answer.install) {
+    throw new Error(NODE24_REQUIRED_MSG);
+  }
+
+  const nvmDir =
+    process.env.NVM_DIR ?? path.join(process.env.HOME ?? '~', '.nvm');
+  const installCmd = `source "${nvmDir}/nvm.sh" && nvm install 24`;
+  await runCommand('bash', ['-c', installCmd], process.cwd(), {
+    ...process.env,
+    NVM_DIR: nvmDir,
+  });
+
+  const versionsAfter = await listNvmNodeVersions();
+  const foundAfter = findNode24OrNewer(versionsAfter);
+
+  if (foundAfter === undefined) {
+    throw new Error(NODE24_REQUIRED_MSG);
+  }
+
+  return foundAfter;
 }

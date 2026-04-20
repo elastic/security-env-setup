@@ -1,11 +1,14 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
+import * as inquirer from 'inquirer';
 
 jest.mock('fs');
 jest.mock('fs/promises');
 jest.mock('child_process');
 jest.mock('ora');
+jest.mock('inquirer');
+jest.mock('@utils/node-version');
 
 import { spawn } from 'child_process';
 import { writeFile } from 'fs/promises';
@@ -15,13 +18,27 @@ import {
   installDependencies,
   runDocsGeneratorCommand,
   runStandardSequence,
+  ensureNode24Installed,
 } from '@runners/docs-generator';
 import { VOLUME_PRESETS } from '@config/volume-presets';
+import {
+  listNvmNodeVersions,
+  findNode24OrNewer,
+} from '@utils/node-version';
 import type {
   DocsGeneratorConfigOptions,
   ElasticCredentials,
   StandardSequenceOptions,
 } from '@types-local/index';
+import type { NvmNodeVersion } from '@utils/node-version';
+
+const mockedInquirer = inquirer as jest.Mocked<typeof inquirer>;
+const mockedListNvmNodeVersions = listNvmNodeVersions as jest.MockedFunction<
+  typeof listNvmNodeVersions
+>;
+const mockedFindNode24OrNewer = findNode24OrNewer as jest.MockedFunction<
+  typeof findNode24OrNewer
+>;
 
 const mockedFs = fs as jest.Mocked<typeof fs>;
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
@@ -620,5 +637,175 @@ describe('writeConfig apiKey edge cases', () => {
     expect(elastic['username']).toBe('u');
     expect(elastic['password']).toBe('p');
     expect(elastic['apiKey']).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ensureNode24Installed
+// ---------------------------------------------------------------------------
+
+describe('ensureNode24Installed', () => {
+  const V24: NvmNodeVersion = { raw: 'v24.0.0', major: 24 };
+  const V22: NvmNodeVersion = { raw: 'v22.0.0', major: 22 };
+
+  it('returns the found version immediately when Node 24+ is already installed', async () => {
+    mockedListNvmNodeVersions.mockResolvedValue([V24]);
+    mockedFindNode24OrNewer.mockReturnValue(V24);
+
+    const result = await ensureNode24Installed();
+
+    expect(result).toEqual(V24);
+    expect(mockedInquirer.prompt).not.toHaveBeenCalled();
+  });
+
+  it('logs info when Node 24+ is already installed', async () => {
+    mockedListNvmNodeVersions.mockResolvedValue([V24]);
+    mockedFindNode24OrNewer.mockReturnValue(V24);
+
+    await ensureNode24Installed();
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining('v24.0.0'),
+    );
+  });
+
+  it('prompts the user when Node 24+ is not installed', async () => {
+    mockedListNvmNodeVersions.mockResolvedValueOnce([V22]);
+    mockedFindNode24OrNewer.mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: false });
+
+    await expect(ensureNode24Installed()).rejects.toThrow();
+
+    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws the exact required message when user declines installation', async () => {
+    mockedListNvmNodeVersions.mockResolvedValueOnce([V22]);
+    mockedFindNode24OrNewer.mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: false });
+
+    await expect(ensureNode24Installed()).rejects.toThrow(
+      "Node 24 is required for security-documents-generator. " +
+      "Run 'nvm install 24' manually and re-launch the CLI. " +
+      "Aborting local setup.",
+    );
+  });
+
+  it('spawns nvm install 24 when user confirms', async () => {
+    mockedListNvmNodeVersions
+      .mockResolvedValueOnce([V22])   // first check: no Node 24
+      .mockResolvedValueOnce([V24]);  // re-check after install
+    mockedFindNode24OrNewer
+      .mockReturnValueOnce(undefined) // first check
+      .mockReturnValueOnce(V24);      // re-check
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockedFs.existsSync.mockReturnValue(false); // ensure nvm path taken below
+    mockSpawnAutoClose(0); // nvm install 24 succeeds
+
+    await ensureNode24Installed();
+
+    const script = getBashScript(0);
+    expect(script).toContain('nvm install 24');
+  });
+
+  it('returns the newly installed version after a successful install', async () => {
+    mockedListNvmNodeVersions
+      .mockResolvedValueOnce([V22])
+      .mockResolvedValueOnce([V24]);
+    mockedFindNode24OrNewer
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(V24);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockSpawnAutoClose(0);
+
+    const result = await ensureNode24Installed();
+
+    expect(result).toEqual(V24);
+  });
+
+  it('throws the exact message when Node 24 is still absent after install', async () => {
+    mockedListNvmNodeVersions
+      .mockResolvedValueOnce([V22])
+      .mockResolvedValueOnce([V22]); // re-check still returns no Node 24
+    mockedFindNode24OrNewer
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockSpawnAutoClose(0);
+
+    await expect(ensureNode24Installed()).rejects.toThrow(
+      "Node 24 is required for security-documents-generator. " +
+      "Run 'nvm install 24' manually and re-launch the CLI. " +
+      "Aborting local setup.",
+    );
+  });
+
+  it('logs installed versions when Node 24+ is not found', async () => {
+    mockedListNvmNodeVersions.mockResolvedValueOnce([V22]);
+    mockedFindNode24OrNewer.mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: false });
+
+    await expect(ensureNode24Installed()).rejects.toThrow();
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('v22.0.0'),
+    );
+  });
+
+  it('shows (none) in warning when no versions are installed', async () => {
+    mockedListNvmNodeVersions.mockResolvedValueOnce([]);
+    mockedFindNode24OrNewer.mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: false });
+
+    await expect(ensureNode24Installed()).rejects.toThrow();
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('(none)'),
+    );
+  });
+
+  it('propagates spawn errors from nvm install 24', async () => {
+    mockedListNvmNodeVersions.mockResolvedValueOnce([V22]);
+    mockedFindNode24OrNewer.mockReturnValueOnce(undefined);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockSpawnAutoClose(1); // install fails
+
+    await expect(ensureNode24Installed()).rejects.toThrow('Process exited with code 1');
+  });
+
+  it('falls back to HOME/.nvm in install command when NVM_DIR is unset', async () => {
+    delete process.env.NVM_DIR;
+    process.env.HOME = '/home/testuser2';
+    mockedListNvmNodeVersions
+      .mockResolvedValueOnce([V22])
+      .mockResolvedValueOnce([V24]);
+    mockedFindNode24OrNewer
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(V24);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockSpawnAutoClose(0);
+
+    await ensureNode24Installed();
+
+    const script = getBashScript(0);
+    expect(script).toContain('/home/testuser2/.nvm/nvm.sh');
+  });
+
+  it('falls back to ~/.nvm in install command when both NVM_DIR and HOME are unset', async () => {
+    delete process.env.NVM_DIR;
+    delete process.env.HOME;
+    mockedListNvmNodeVersions
+      .mockResolvedValueOnce([V22])
+      .mockResolvedValueOnce([V24]);
+    mockedFindNode24OrNewer
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(V24);
+    mockedInquirer.prompt.mockResolvedValueOnce({ install: true });
+    mockSpawnAutoClose(0);
+
+    await ensureNode24Installed();
+
+    const script = getBashScript(0);
+    expect(script).toContain('~/.nvm/nvm.sh');
   });
 });
