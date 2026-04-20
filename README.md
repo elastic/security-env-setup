@@ -45,7 +45,7 @@ TypeScript fits this use case better than Go because the npm ecosystem already c
 
 **Implementing surgical yarn cache recovery.** When `yarn kbn bootstrap` fails with an integrity-check error, the tool automatically cleans the specific failing package's cache and retries. If a second integrity error occurs, it wipes the full yarn cache as a last resort. Non-integrity failures throw immediately without any cache mutation. This three-attempt strategy avoids unnecessary full-cache destruction on the first error.
 
-**Multi-space data generation with user-controlled space selection.** After the Kibana repo path prompt, a checkbox prompt lets the user pick which additional spaces receive data. Attacks and cases run per-space (cases use a reduced count of 300 to stay within time budgets); events run once against the default space only. Individual space failures are caught and warned without aborting the remaining spaces.
+**Single-space data generation in the interactive flow.** After the Kibana repo path prompt, the tool can generate sample data for the selected Kibana space in the current run. The current implementation performs one data-generation pass for that single space rather than offering a follow-up checkbox prompt for additional spaces or running attacks and cases separately across multiple spaces.
 
 **Iterating on review feedback.** After each round of pull request feedback, Claude Code applied corrections (unused imports, missing edge-case tests, inconsistent error messages) without touching unrelated code. The constraint "only change what was asked" was respected throughout.
 
