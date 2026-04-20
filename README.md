@@ -166,7 +166,7 @@ src/
                     detects new vs. old plugin directory layout automatically;
                     passes credentials via environment variables, never CLI args
   config/
-    store.ts      — reads and writes API keys to ~/.config/security-env-setup/config.json
+    store.ts      — reads and writes API keys to ~/.security-env-setup/config.json
     endpoints.ts  — maps environment names to Elastic Cloud API base URLs
   regions.ts      — available regions per environment (extracted from cloud.ts for clean layer separation)
   utils/
