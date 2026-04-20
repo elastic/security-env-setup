@@ -1,0 +1,237 @@
+import fs from 'fs';
+import path from 'path';
+import chalk from 'chalk';
+import type { ElasticCredentials, LocalWizardAnswers } from '../types';
+import {
+  createSpace,
+  initializeSecurityApp,
+  installPrebuiltRules,
+  bulkEnableImmutableRules,
+  installSampleData,
+} from '../api/kibana';
+import { detectServices } from '../runners/local-services';
+import {
+  ensureNode24Installed,
+  ensureRepoCloned,
+  writeConfig,
+  installDependencies,
+  runStandardSequence,
+} from '../runners/docs-generator';
+import { runKibanaLocalGenerator } from '../runners/scripts';
+import { VOLUME_PRESETS } from '../config/volume-presets';
+import logger from '../utils/logger';
+import { getErrorMessage } from '../utils/errors';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const TOTAL_STEPS = 10;
+const SAMPLE_DATASETS: ReadonlyArray<'flights' | 'ecommerce' | 'logs'> = [
+  'flights',
+  'ecommerce',
+  'logs',
+];
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+function printLocalSummary(answers: LocalWizardAnswers): void {
+  const {
+    target,
+    kibanaUrl,
+    elasticsearchUrl,
+    space,
+    volume,
+    docsGeneratorDir,
+    installSampleData: sampleDataFlag,
+  } = answers;
+
+  const line = chalk.cyan('─'.repeat(60));
+  const header = chalk.bold.cyan('  Local Environment Ready');
+  const label = (l: string): string => chalk.bold.white(l.padEnd(18));
+  const value = (v: string): string => chalk.green(v);
+
+  const spaceBase =
+    space === 'default' ? kibanaUrl : `${kibanaUrl}/s/${space}`;
+
+  logger.print('');
+  logger.print(line);
+  logger.print(header);
+  logger.print(line);
+  logger.print(`  ${label('Target')}${value(target)}`);
+  logger.print(`  ${label('Kibana')}${value(kibanaUrl)}`);
+  logger.print(`  ${label('Elasticsearch')}${value(elasticsearchUrl)}`);
+  logger.print(`  ${label('Space')}${value(space)}`);
+  logger.print(`  ${label('Volume')}${value(volume)}`);
+  logger.print(`  ${label('Sample data')}${value(sampleDataFlag ? 'installed' : 'skipped')}`);
+  logger.print(`  ${label('docs-generator')}${value(docsGeneratorDir)}`);
+  logger.print('');
+  logger.print(`  ${chalk.bold.white('Verify at:')}`);
+  logger.print(`  ${chalk.cyan(`${spaceBase}/app/security`)}`);
+  logger.print(`  ${chalk.cyan(`${spaceBase}/app/security/alerts`)}`);
+  logger.print(`  ${chalk.cyan(`${spaceBase}/app/security/rules`)}`);
+  logger.print(`  ${chalk.cyan(`${spaceBase}/app/security/entity_analytics`)}`);
+  logger.print(line);
+  logger.print('');
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Orchestrates the full local-target setup flow.
+ *
+ * Fatal errors (bootstrap missing, services down, clone fails) propagate to
+ * the caller. Non-fatal errors (individual generator failures) are swallowed
+ * as warnings so the sequence always reaches the summary step.
+ */
+export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
+  const credentials: ElasticCredentials = {
+    url: answers.elasticsearchUrl,
+    username: answers.username,
+    password: answers.password,
+  };
+  const spaceArg = answers.space === 'default' ? undefined : answers.space;
+
+  // ── Step 1/10: Node 24 preflight ──────────────────────────────────────────
+  logger.step(1, TOTAL_STEPS, 'Checking Node 24 via nvm…');
+  try {
+    await ensureNode24Installed();
+  } catch (err) {
+    logger.error(getErrorMessage(err));
+    return;
+  }
+
+  // ── Step 2/10: Bootstrap check ────────────────────────────────────────────
+  logger.step(2, TOTAL_STEPS, 'Checking Kibana bootstrap…');
+  const markerPath = path.join(
+    answers.kibanaDir,
+    'node_modules',
+    '@kbn',
+    'test-es-server',
+  );
+  if (!fs.existsSync(markerPath)) {
+    throw new Error(
+      `Kibana bootstrap not found. Run 'yarn kbn bootstrap' in ` +
+        `${answers.kibanaDir} first, then re-run this command.`,
+    );
+  }
+
+  // ── Step 3/10: Service detection ──────────────────────────────────────────
+  logger.step(3, TOTAL_STEPS, 'Checking Kibana + Elasticsearch are running…');
+  const services = await detectServices(
+    answers.kibanaUrl,
+    answers.elasticsearchUrl,
+    credentials,
+  );
+
+  if (!services.kibana || !services.elasticsearch) {
+    const { kibanaDir, target } = answers;
+    const isStateful = target === 'local-stateful';
+    const startInstructions = isStateful
+      ? `  cd ${kibanaDir} && yarn es snapshot --license trial\n` +
+        `  cd ${kibanaDir} && yarn start`
+      : `  cd ${kibanaDir} && yarn es serverless --projectType=security\n` +
+        `  cd ${kibanaDir} && yarn serverless-security`;
+    throw new Error(
+      `Kibana and/or Elasticsearch are not running. Start them in two terminals:\n` +
+        `${startInstructions}\n` +
+        `Then re-run this command. (Auto-start coming in the next release.)`,
+    );
+  }
+
+  // ── Step 4/10: Sample data ────────────────────────────────────────────────
+  logger.step(4, TOTAL_STEPS, 'Installing Kibana sample data…');
+  if (answers.installSampleData) {
+    for (const dataset of SAMPLE_DATASETS) {
+      try {
+        await installSampleData(
+          answers.kibanaUrl,
+          credentials,
+          dataset,
+          spaceArg,
+        );
+        logger.info(`Sample dataset "${dataset}" installed.`);
+      } catch (err) {
+        logger.warn(
+          `Failed to install sample dataset "${dataset}": ${getErrorMessage(err)}`,
+        );
+      }
+    }
+  } else {
+    logger.info('Sample data installation skipped.');
+  }
+
+  // ── Step 5/10: Space creation ─────────────────────────────────────────────
+  logger.step(5, TOTAL_STEPS, 'Creating Kibana space…');
+  if (answers.space !== 'default') {
+    const { alreadyExisted } = await createSpace(
+      answers.kibanaUrl,
+      credentials,
+      { id: answers.space, name: answers.space },
+    );
+    if (alreadyExisted) {
+      logger.warn(`Space "${answers.space}" already exists — skipping creation.`);
+    } else {
+      logger.info(`Space "${answers.space}" created.`);
+    }
+  } else {
+    logger.info('Using default space — no space creation needed.');
+  }
+
+  // ── Step 6/10: Detection Engine init ──────────────────────────────────────
+  logger.step(6, TOTAL_STEPS, 'Initializing Security Solution detection engine…');
+  await initializeSecurityApp(answers.kibanaUrl, credentials);
+
+  // ── Step 7/10: Prebuilt rules ─────────────────────────────────────────────
+  logger.step(7, TOTAL_STEPS, 'Installing and enabling prebuilt detection rules…');
+  const installResult = await installPrebuiltRules(
+    answers.kibanaUrl,
+    credentials,
+    spaceArg,
+  );
+  logger.info(
+    `Prebuilt rules: ${String(installResult.rules_installed)} installed, ` +
+      `${String(installResult.rules_updated)} updated.`,
+  );
+  await bulkEnableImmutableRules(answers.kibanaUrl, credentials, spaceArg);
+  logger.info('All immutable rules enabled.');
+
+  // ── Step 8/10: Kibana internal generator ──────────────────────────────────
+  logger.step(8, TOTAL_STEPS, 'Running Kibana internal data generator…');
+  const preset = VOLUME_PRESETS[answers.volume];
+  try {
+    await runKibanaLocalGenerator(answers.kibanaDir, answers.kibanaUrl, credentials, {
+      spaceId: answers.space,
+      events: preset.events,
+      hosts: preset.hosts,
+      users: preset.users,
+    });
+  } catch (err) {
+    logger.warn(
+      `Kibana internal generator failed (continuing): ${getErrorMessage(err)}`,
+    );
+  }
+
+  // ── Step 9/10: docs-generator ─────────────────────────────────────────────
+  logger.step(9, TOTAL_STEPS, 'Setting up security-documents-generator…');
+  await ensureRepoCloned(answers.docsGeneratorDir);
+  await writeConfig(answers.docsGeneratorDir, {
+    elasticsearchUrl: answers.elasticsearchUrl,
+    kibanaUrl: answers.kibanaUrl,
+    mode: answers.target === 'local-serverless' ? 'serverless' : 'stateful',
+    credentials,
+  });
+  await installDependencies(answers.docsGeneratorDir);
+  await runStandardSequence(answers.docsGeneratorDir, {
+    space: answers.space,
+    volume: answers.volume,
+  });
+
+  // ── Step 10/10: Summary ───────────────────────────────────────────────────
+  logger.step(10, TOTAL_STEPS, 'Done!');
+  printLocalSummary(answers);
+}

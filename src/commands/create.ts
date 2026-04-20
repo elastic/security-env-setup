@@ -6,6 +6,7 @@ import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
 import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '../runners/scripts';
 import { runWizard } from '../wizard/prompts';
+import { runLocalFlow } from './create-local';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
 
@@ -82,12 +83,14 @@ async function runCreate(): Promise<void> {
   // ── Step 1/5: Interactive wizard ──────────────────────────────────────────
   logger.step(1, TOTAL_STEPS, 'Running deployment wizard…');
 
-  const { config, environment, target } = await runWizard();
+  const result = await runWizard();
 
-  if (target === 'local-stateful' || target === 'local-serverless') {
-    logger.info(`Target '${target}' not yet implemented — coming in next iteration.`);
+  if (result.target !== 'elastic-cloud') {
+    await runLocalFlow(result);
     return;
   }
+
+  const { config, environment } = result;
 
   if (!hasApiKey(environment)) {
     logger.error(

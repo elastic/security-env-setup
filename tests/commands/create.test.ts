@@ -4,6 +4,7 @@ jest.mock('@api/cloud');
 jest.mock('@api/kibana');
 jest.mock('@runners/scripts');
 jest.mock('@config/store');
+jest.mock('@commands/create-local');
 
 import ora from 'ora';
 import { runWizard } from '@wizard/prompts';
@@ -11,7 +12,9 @@ import { createDeployment, waitForDeployment } from '@api/cloud';
 import { createSpaces, initializeSecurityApp } from '@api/kibana';
 import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '@runners/scripts';
 import { hasApiKey } from '@config/store';
+import { runLocalFlow } from '@commands/create-local';
 import { createCommand } from '@commands/create';
+import type { LocalWizardAnswers } from '@types-local/index';
 
 const mockSpinner = {
   start: jest.fn().mockReturnThis(),
@@ -32,6 +35,7 @@ const mockedRunAllDataGen = runAllDataGeneration as jest.MockedFunction<typeof r
 const mockedRunGenerateAttacks = runGenerateAttacks as jest.MockedFunction<typeof runGenerateAttacks>;
 const mockedRunGenerateCases = runGenerateCases as jest.MockedFunction<typeof runGenerateCases>;
 const mockedHasApiKey = hasApiKey as jest.MockedFunction<typeof hasApiKey>;
+const mockedRunLocalFlow = runLocalFlow as jest.MockedFunction<typeof runLocalFlow>;
 
 const WIZARD_RESULT = {
   config: {
@@ -48,6 +52,19 @@ const WIZARD_RESULT = {
   },
   environment: 'prod' as const,
   target: 'elastic-cloud' as const,
+};
+
+const LOCAL_ANSWERS: LocalWizardAnswers = {
+  target: 'local-stateful',
+  kibanaDir: '/home/user/kibana',
+  kibanaUrl: 'http://localhost:5601',
+  elasticsearchUrl: 'http://localhost:9200',
+  username: 'elastic',
+  password: 'changeme',
+  space: 'default',
+  volume: 'medium',
+  docsGeneratorDir: '/home/user/security-documents-generator',
+  installSampleData: false,
 };
 
 const INITIAL_RESULT = {
@@ -86,6 +103,7 @@ beforeEach(() => {
   consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
   mockedHasApiKey.mockReturnValue(true);
+  mockedRunLocalFlow.mockResolvedValue(undefined);
   mockedRunWizard.mockResolvedValue(WIZARD_RESULT);
   mockedCreateDeployment.mockResolvedValue(INITIAL_RESULT);
   mockedWaitForDeployment.mockResolvedValue(RUNNING_RESULT);
@@ -112,26 +130,19 @@ afterAll(() => {
 });
 
 describe('create command', () => {
-  it('logs not-yet-implemented and skips deployment for local-stateful', async () => {
-    mockedRunWizard.mockResolvedValue({
-      ...WIZARD_RESULT,
-      target: 'local-stateful' as const,
-    });
+  it('delegates to runLocalFlow for local-stateful and skips deployment', async () => {
+    mockedRunWizard.mockResolvedValue(LOCAL_ANSWERS);
     await invokeCreate();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
     expect(mockedCreateDeployment).not.toHaveBeenCalled();
-    const output = consoleSpy.mock.calls.flat().join('\n');
-    expect(output).toContain('local-stateful');
   });
 
-  it('logs not-yet-implemented and skips deployment for local-serverless', async () => {
-    mockedRunWizard.mockResolvedValue({
-      ...WIZARD_RESULT,
-      target: 'local-serverless' as const,
-    });
+  it('delegates to runLocalFlow for local-serverless and skips deployment', async () => {
+    const serverlessAnswers: LocalWizardAnswers = { ...LOCAL_ANSWERS, target: 'local-serverless' };
+    mockedRunWizard.mockResolvedValue(serverlessAnswers);
     await invokeCreate();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(serverlessAnswers);
     expect(mockedCreateDeployment).not.toHaveBeenCalled();
-    const output = consoleSpy.mock.calls.flat().join('\n');
-    expect(output).toContain('local-serverless');
   });
 
   it('runs the full happy path — wizard → create → wait → spaces → security init', async () => {

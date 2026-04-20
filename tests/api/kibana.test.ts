@@ -12,6 +12,7 @@ import {
   initializeSecurityApp,
   installPrebuiltRules,
   bulkEnableImmutableRules,
+  installSampleData,
 } from '@api/kibana';
 import type {
   BulkRuleActionResponse,
@@ -436,5 +437,49 @@ describe('bulkEnableImmutableRules', () => {
     mockedAxios.post.mockRejectedValueOnce(err);
     mockedAxios.isAxiosError.mockReturnValue(true);
     await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow('Invalid credentials');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// installSampleData
+// ---------------------------------------------------------------------------
+
+describe('installSampleData', () => {
+  it('POSTs to the correct URL and resolves on 2xx', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: {} });
+    await expect(
+      installSampleData(KIBANA_URL, CREDS, 'flights'),
+    ).resolves.toBeUndefined();
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/api/sample_data/flights`,
+      {},
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  it('uses space prefix in URL when spaceId is provided', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: {} });
+    await installSampleData(KIBANA_URL, CREDS, 'ecommerce', 'my-space');
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      `${KIBANA_URL}/s/my-space/api/sample_data/ecommerce`,
+      {},
+      expect.any(Object),
+    );
+  });
+
+  it('treats HTTP 400 ("already installed") as success', async () => {
+    const err = { isAxiosError: true, response: { status: 400 }, message: 'Bad request' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(installSampleData(KIBANA_URL, CREDS, 'logs')).resolves.toBeUndefined();
+  });
+
+  it('propagates non-400 errors via handleKibanaError', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Server error' };
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(
+      installSampleData(KIBANA_URL, CREDS, 'flights'),
+    ).rejects.toThrow('Kibana API request failed');
   });
 });

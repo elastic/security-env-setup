@@ -1,6 +1,15 @@
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import * as inquirer from 'inquirer';
-import type { DeploymentConfig, Environment, KibanaSpace, Target } from '../types';
+import type {
+  Environment,
+  KibanaSpace,
+  LocalWizardAnswers,
+  Target,
+  Volume,
+  WizardResult,
+} from '../types';
 import { REGIONS } from '../regions';
 
 // ---------------------------------------------------------------------------
@@ -10,6 +19,9 @@ import { REGIONS } from '../regions';
 const DEFAULT_VERSION = '8.17.1';
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const DEPLOYMENT_NAME_RE = /^[a-zA-Z0-9-]+$/;
+const SPACE_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+/** Shell-unsafe characters that are forbidden in the docs-generator directory path. */
+const UNSAFE_PATH_RE = /[ '"$`;&|<>]/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,11 +36,164 @@ function nameToId(name: string): string {
 // Wizard
 // ---------------------------------------------------------------------------
 
-export async function runWizard(): Promise<{
-  config: DeploymentConfig;
-  environment: Environment;
-  target: Target;
-}> {
+// ---------------------------------------------------------------------------
+// Local target prompts
+// ---------------------------------------------------------------------------
+
+async function runLocalPrompts(
+  target: 'local-stateful' | 'local-serverless',
+): Promise<LocalWizardAnswers> {
+  const defaultUsername =
+    target === 'local-stateful' ? 'elastic' : 'elastic_serverless';
+  const defaultKibanaDir = path.join(
+    os.homedir(),
+    'Documents',
+    'Kibana',
+    'kibana',
+  );
+  const defaultDocsDir = path.join(
+    os.homedir(),
+    'Documents',
+    'Kibana',
+    'security-documents-generator',
+  );
+
+  const answers = await inquirer.prompt<{
+    kibanaDir: string;
+    kibanaUrl: string;
+    elasticsearchUrl: string;
+    username: string;
+    password: string;
+    space: string;
+    volume: Volume;
+    docsGeneratorDir: string;
+    installSampleData: boolean;
+  }>([
+    {
+      type: 'input',
+      name: 'kibanaDir',
+      message: 'Path to your Kibana checkout:',
+      default: defaultKibanaDir,
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (!fs.existsSync(t)) return `Path does not exist: ${t}`;
+        if (!fs.statSync(t).isDirectory()) return `Path is not a directory: ${t}`;
+        if (!fs.existsSync(path.join(t, '.git')))
+          return `Not a git repository (no .git directory): ${t}`;
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'input',
+      name: 'kibanaUrl',
+      message: 'Kibana URL:',
+      default: 'http://localhost:5601',
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (t.length === 0) return 'Kibana URL is required.';
+        if (!t.startsWith('http://') && !t.startsWith('https://'))
+          return 'URL must start with http:// or https://.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'input',
+      name: 'elasticsearchUrl',
+      message: 'Elasticsearch URL:',
+      default: 'http://localhost:9200',
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (t.length === 0) return 'Elasticsearch URL is required.';
+        if (!t.startsWith('http://') && !t.startsWith('https://'))
+          return 'URL must start with http:// or https://.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'input',
+      name: 'username',
+      message: 'Username:',
+      default: defaultUsername,
+      validate: (input: string): boolean | string => {
+        if (input.trim().length === 0) return 'Username is required.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'password',
+      name: 'password',
+      message: 'Password:',
+      default: 'changeme',
+      mask: '*',
+      validate: (input: string): boolean | string => {
+        if (input.trim().length === 0) return 'Password is required.';
+        return true;
+      },
+    },
+    {
+      type: 'input',
+      name: 'space',
+      message: 'Kibana space ID:',
+      default: 'default',
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (!SPACE_ID_RE.test(t))
+          return (
+            'Space ID must start with a lowercase letter or digit, and contain ' +
+            'only lowercase alphanumeric characters, underscores, or hyphens.'
+          );
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'list',
+      name: 'volume',
+      message: 'Data volume:',
+      default: 'medium',
+      choices: [
+        { name: 'light — ~1k alerts, 5 hosts, 5 users', value: 'light' },
+        { name: 'medium — ~10k alerts, 10 hosts, 10 users (recommended)', value: 'medium' },
+        { name: 'heavy — ~50k alerts, 25 hosts, 25 users', value: 'heavy' },
+      ],
+    },
+    {
+      type: 'input',
+      name: 'docsGeneratorDir',
+      message: 'Path for security-documents-generator:',
+      default: defaultDocsDir,
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (!path.isAbsolute(t)) return 'Path must be absolute.';
+        if (UNSAFE_PATH_RE.test(t))
+          return (
+            "Path must not contain shell-unsafe characters " +
+            "(space, ', \", $, `, ;, &, |, <, >)."
+          );
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'confirm',
+      name: 'installSampleData',
+      message: 'Install Kibana sample data (flights, ecommerce, logs)?',
+      default: false,
+    },
+  ]);
+
+  return { target, ...answers };
+}
+
+// ---------------------------------------------------------------------------
+// Wizard
+// ---------------------------------------------------------------------------
+
+export async function runWizard(): Promise<WizardResult> {
   // ── Step 0: environment type selection ────────────────────────────────────
   const { target } = await inquirer.prompt<{ target: Target }>([
     {
@@ -44,25 +209,9 @@ export async function runWizard(): Promise<{
     },
   ]);
 
-  // Non-ECH targets are not yet implemented — return a minimal config so the
-  // caller can branch and exit cleanly without asking ECH-specific questions.
-  if (target !== 'elastic-cloud') {
-    return {
-      target,
-      environment: 'prod',
-      config: {
-        name: '',
-        region: '',
-        version: '',
-        spaces: [],
-        dataTypes: {
-          kibanaRepoPath: '',
-          generateAlerts: false,
-          generateCases: false,
-          generateEvents: false,
-        },
-      },
-    };
+  // Local targets collect their own question set and return early.
+  if (target === 'local-stateful' || target === 'local-serverless') {
+    return runLocalPrompts(target);
   }
 
   // ── Step 1: core deployment settings ──────────────────────────────────────

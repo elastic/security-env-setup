@@ -100,3 +100,20 @@ export interface StandardSequenceOptions {
   space: string;
   volume: Volume;
 }
+
+export interface LocalWizardAnswers {
+  target: 'local-stateful' | 'local-serverless';
+  kibanaDir: string;
+  kibanaUrl: string;
+  elasticsearchUrl: string;
+  username: string;
+  password: string;
+  space: string;
+  volume: Volume;
+  docsGeneratorDir: string;
+  installSampleData: boolean;
+}
+
+export type WizardResult =
+  | { target: 'elastic-cloud'; config: DeploymentConfig; environment: Environment }
+  | LocalWizardAnswers;

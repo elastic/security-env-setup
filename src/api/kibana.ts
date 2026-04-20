@@ -312,6 +312,36 @@ export async function bulkEnableImmutableRules(
 }
 
 /**
+ * Installs a Kibana built-in sample dataset (flights, ecommerce, or logs).
+ *
+ * POSTs to `{spacePrefix}/api/sample_data/{dataset}` with an empty body.
+ * HTTP 400 ("already installed") is silently accepted so callers can safely
+ * call this function regardless of the current installation state.
+ */
+export async function installSampleData(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  dataset: 'ecommerce' | 'flights' | 'logs',
+  spaceId?: string,
+): Promise<void> {
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+
+  try {
+    await axios.post<unknown>(
+      `${kibanaUrl}${prefix}/api/sample_data/${dataset}`,
+      {},
+      { headers, timeout: REQUEST_TIMEOUT_MS },
+    );
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 400) {
+      return; // already installed — acceptable
+    }
+    handleKibanaError(err, 'installSampleData', kibanaUrl);
+  }
+}
+
+/**
  * Initialises the Security Solution detection-engine index.
  * Must be called once before data-generation scripts can run.
  * Handles 409 gracefully — the index is already initialised, which is fine.
