@@ -9,7 +9,8 @@ import {
   bulkEnableImmutableRules,
   installSampleData,
 } from '../api/kibana';
-import { detectServices } from '../runners/local-services';
+import { ensureServicesRunning } from '../runners/local-services';
+import type { AutoStartResult } from '../runners/local-services';
 import {
   ensureNode24Installed,
   ensureRepoCloned,
@@ -37,7 +38,10 @@ const SAMPLE_DATASETS: ReadonlyArray<'flights' | 'ecommerce' | 'logs'> = [
 // Summary
 // ---------------------------------------------------------------------------
 
-function printLocalSummary(answers: LocalWizardAnswers): void {
+function printLocalSummary(
+  answers: LocalWizardAnswers,
+  startMethod: AutoStartResult['method'],
+): void {
   const {
     target,
     kibanaUrl,
@@ -61,6 +65,7 @@ function printLocalSummary(answers: LocalWizardAnswers): void {
   logger.print(header);
   logger.print(line);
   logger.print(`  ${label('Target')}${value(target)}`);
+  logger.print(`  ${label('Services')}${value(startMethod)}`);
   logger.print(`  ${label('Kibana')}${value(kibanaUrl)}`);
   logger.print(`  ${label('Elasticsearch')}${value(elasticsearchUrl)}`);
   logger.print(`  ${label('Space')}${value(space)}`);
@@ -120,27 +125,21 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     );
   }
 
-  // ── Step 3/10: Service detection ──────────────────────────────────────────
-  logger.step(3, TOTAL_STEPS, 'Checking Kibana + Elasticsearch are running…');
-  const services = await detectServices(
+  // ── Step 3/10: Ensure services running ───────────────────────────────────
+  logger.step(3, TOTAL_STEPS, 'Ensuring Kibana and Elasticsearch are running…');
+  const autoStart = await ensureServicesRunning(
+    answers.target,
+    answers.kibanaDir,
     answers.kibanaUrl,
     answers.elasticsearchUrl,
     credentials,
   );
-
-  if (!services.kibana || !services.elasticsearch) {
-    const { kibanaDir, target } = answers;
-    const isStateful = target === 'local-stateful';
-    const startInstructions = isStateful
-      ? `  cd ${kibanaDir} && yarn es snapshot --license trial\n` +
-        `  cd ${kibanaDir} && yarn start`
-      : `  cd ${kibanaDir} && yarn es serverless --projectType=security\n` +
-        `  cd ${kibanaDir} && yarn serverless-security`;
-    throw new Error(
-      `Kibana and/or Elasticsearch are not running. Start them in two terminals:\n` +
-        `${startInstructions}\n` +
-        `Then re-run this command. (Auto-start coming in the next release.)`,
-    );
+  if (autoStart.method === 'already-running') {
+    logger.info('Services already running.');
+  } else if (autoStart.method === 'osascript') {
+    logger.info('Started services in new Terminal tabs.');
+  } else {
+    logger.info('Services started (assisted).');
   }
 
   // ── Step 4/10: Sample data ────────────────────────────────────────────────
@@ -233,5 +232,5 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
 
   // ── Step 10/10: Summary ───────────────────────────────────────────────────
   logger.step(10, TOTAL_STEPS, 'Done!');
-  printLocalSummary(answers);
+  printLocalSummary(answers, autoStart.method);
 }

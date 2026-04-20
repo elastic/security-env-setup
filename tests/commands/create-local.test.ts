@@ -14,7 +14,8 @@ import {
   bulkEnableImmutableRules,
   installSampleData,
 } from '@api/kibana';
-import { detectServices } from '@runners/local-services';
+import { ensureServicesRunning } from '@runners/local-services';
+import type { AutoStartResult } from '@runners/local-services';
 import {
   ensureNode24Installed,
   ensureRepoCloned,
@@ -34,7 +35,7 @@ const mockedInitializeSecurityApp = initializeSecurityApp as jest.MockedFunction
 const mockedInstallPrebuiltRules = installPrebuiltRules as jest.MockedFunction<typeof installPrebuiltRules>;
 const mockedBulkEnableImmutableRules = bulkEnableImmutableRules as jest.MockedFunction<typeof bulkEnableImmutableRules>;
 const mockedInstallSampleData = installSampleData as jest.MockedFunction<typeof installSampleData>;
-const mockedDetectServices = detectServices as jest.MockedFunction<typeof detectServices>;
+const mockedEnsureServicesRunning = ensureServicesRunning as jest.MockedFunction<typeof ensureServicesRunning>;
 const mockedEnsureNode24Installed = ensureNode24Installed as jest.MockedFunction<typeof ensureNode24Installed>;
 const mockedEnsureRepoCloned = ensureRepoCloned as jest.MockedFunction<typeof ensureRepoCloned>;
 const mockedWriteConfig = writeConfig as jest.MockedFunction<typeof writeConfig>;
@@ -92,7 +93,11 @@ beforeEach(() => {
   mockedFs.existsSync.mockReturnValue(true);
 
   mockedEnsureNode24Installed.mockResolvedValue(MOCK_V24);
-  mockedDetectServices.mockResolvedValue({ kibana: true, elasticsearch: true });
+  mockedEnsureServicesRunning.mockResolvedValue({
+    method: 'already-running',
+    kibana: true,
+    elasticsearch: true,
+  });
 
   mockedInstallSampleData.mockResolvedValue(undefined);
   mockedCreateSpace.mockResolvedValue({
@@ -142,9 +147,11 @@ describe('runLocalFlow — happy path (default space, no sample data)', () => {
     expect(mockedFs.existsSync).toHaveBeenCalledWith(expectedMarker);
   });
 
-  it('calls detectServices with the correct URLs', async () => {
+  it('calls ensureServicesRunning with the correct args', async () => {
     await runLocalFlow(BASE_ANSWERS);
-    expect(mockedDetectServices).toHaveBeenCalledWith(
+    expect(mockedEnsureServicesRunning).toHaveBeenCalledWith(
+      BASE_ANSWERS.target,
+      BASE_ANSWERS.kibanaDir,
       BASE_ANSWERS.kibanaUrl,
       BASE_ANSWERS.elasticsearchUrl,
       expect.objectContaining({ username: 'elastic' }),
@@ -311,10 +318,10 @@ describe('runLocalFlow — Node 24 preflight failure', () => {
     );
   });
 
-  it('does not call detectServices when Node 24 preflight fails', async () => {
+  it('does not call ensureServicesRunning when Node 24 preflight fails', async () => {
     mockedEnsureNode24Installed.mockRejectedValueOnce(new Error('Node 24 missing'));
     await runLocalFlow(BASE_ANSWERS);
-    expect(mockedDetectServices).not.toHaveBeenCalled();
+    expect(mockedEnsureServicesRunning).not.toHaveBeenCalled();
   });
 });
 
@@ -337,40 +344,64 @@ describe('runLocalFlow — bootstrap check fails', () => {
     );
   });
 
-  it('does not call detectServices when bootstrap check fails', async () => {
+  it('does not call ensureServicesRunning when bootstrap check fails', async () => {
     mockedFs.existsSync.mockReturnValueOnce(false);
     await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow();
-    expect(mockedDetectServices).not.toHaveBeenCalled();
+    expect(mockedEnsureServicesRunning).not.toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Service detection failure
+// ensureServicesRunning integration (Stage 4b)
 // ---------------------------------------------------------------------------
 
-describe('runLocalFlow — services not running', () => {
-  it('throws with stateful instructions when Kibana is down (local-stateful)', async () => {
-    mockedDetectServices.mockResolvedValueOnce({ kibana: false, elasticsearch: true });
-    await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow('yarn es snapshot');
+describe('runLocalFlow — ensureServicesRunning integration', () => {
+  const alreadyRunning: AutoStartResult = {
+    method: 'already-running',
+    kibana: true,
+    elasticsearch: true,
+  };
+  const osascriptResult: AutoStartResult = {
+    method: 'osascript',
+    kibana: true,
+    elasticsearch: true,
+  };
+  const assistedResult: AutoStartResult = {
+    method: 'assisted',
+    kibana: true,
+    elasticsearch: true,
+  };
+
+  it('already-running → proceeds normally through step 4+', async () => {
+    mockedEnsureServicesRunning.mockResolvedValueOnce(alreadyRunning);
+    await expect(runLocalFlow(BASE_ANSWERS)).resolves.toBeUndefined();
+    expect(mockedInitializeSecurityApp).toHaveBeenCalledTimes(1);
   });
 
-  it('throws with serverless instructions when Kibana is down (local-serverless)', async () => {
-    mockedDetectServices.mockResolvedValueOnce({ kibana: false, elasticsearch: true });
-    await expect(
-      runLocalFlow({ ...BASE_ANSWERS, target: 'local-serverless' }),
-    ).rejects.toThrow('yarn es serverless');
+  it('osascript → flow proceeds and summary includes method', async () => {
+    mockedEnsureServicesRunning.mockResolvedValueOnce(osascriptResult);
+    await expect(runLocalFlow(BASE_ANSWERS)).resolves.toBeUndefined();
+    expect(mockedInitializeSecurityApp).toHaveBeenCalledTimes(1);
+    // Summary is printed to console; verify the method value appears
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('osascript');
   });
 
-  it('throws when Elasticsearch is down', async () => {
-    mockedDetectServices.mockResolvedValueOnce({ kibana: true, elasticsearch: false });
-    await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow(
-      'Kibana and/or Elasticsearch are not running',
+  it('assisted → flow proceeds and summary includes method', async () => {
+    mockedEnsureServicesRunning.mockResolvedValueOnce(assistedResult);
+    await expect(runLocalFlow(BASE_ANSWERS)).resolves.toBeUndefined();
+    expect(mockedInitializeSecurityApp).toHaveBeenCalledTimes(1);
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('assisted');
+  });
+
+  it('propagates timeout error from ensureServicesRunning and does not call step 4+', async () => {
+    mockedEnsureServicesRunning.mockRejectedValueOnce(
+      new Error('Elasticsearch did not become healthy within 300s.'),
     );
-  });
-
-  it('does not call initializeSecurityApp when services are down', async () => {
-    mockedDetectServices.mockResolvedValueOnce({ kibana: false, elasticsearch: false });
-    await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow();
+    await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow(
+      'did not become healthy',
+    );
     expect(mockedInitializeSecurityApp).not.toHaveBeenCalled();
   });
 });
