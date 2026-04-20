@@ -183,6 +183,7 @@ The deployment payload is built using hardcoded but API-verified instance config
 - **Alerts in additional spaces:** `generate_cli.js --attacks` generates alerts via rule preview and copies them to the default space. When run against a custom space, the 15 prebuilt rules are installed and enabled but alerts may not appear immediately — the rules need to execute against existing data. Alerts in the default space are always generated correctly.
 - **Events (yarn test:generate) are default-space only:** The resolver generator script does not support `--spaceId`. Events are always generated in the default space regardless of the additional spaces selection.
 - **Kibana bootstrap required:** Data generation requires a local Kibana repository with `yarn kbn bootstrap` completed. The tool handles this automatically, including yarn cache recovery on integrity errors.
+- **Kibana must be started with `--no-base-path`:** Kibana's dev server generates a random URL prefix (basePath) by default, which causes all `POST /api/...` calls to 404. When the tool auto-starts Kibana it passes `--no-base-path` automatically. If you start Kibana yourself before running `create`, make sure to include the flag: `yarn start --no-base-path`. The tool will detect a running Kibana with a basePath and abort with an actionable error.
 
 ## Running Tests
 

@@ -45,34 +45,110 @@ export interface WaitUntilHealthyOptions {
   intervalMs?: number;
 }
 
+/**
+ * Discriminated union returned by {@link probeKibana}.
+ * - `healthy`  — Kibana responded with 2xx.
+ * - `down`     — Kibana is unreachable or returned a non-actionable status.
+ * - `basepath` — Kibana is reachable but running with a random basePath (302 redirect);
+ *                `basePath` is the path prefix, e.g. `"/fxz"`.
+ */
+export type KibanaProbeResult =
+  | { kind: 'healthy' }
+  | { kind: 'down' }
+  | { kind: 'basepath'; basePath: string };
+
+/**
+ * Discriminated union returned by {@link detectServices}.
+ * - `ok`              — normal result with per-service booleans.
+ * - `kibana-basepath` — Kibana is running with a random basePath; caller must abort.
+ */
+export type ServiceDetectionResult =
+  | { kind: 'ok'; kibana: boolean; elasticsearch: boolean }
+  | { kind: 'kibana-basepath'; basePath: string };
+
 // ---------------------------------------------------------------------------
-// detectServices
+// probeKibana
 // ---------------------------------------------------------------------------
 
 /**
- * Pings Kibana and Elasticsearch to check whether both services are reachable.
+ * Probes Kibana at `/api/status` with `maxRedirects: 0` so that a 302
+ * redirect caused by Kibana's random basePath is captured rather than
+ * followed.
  *
- * Uses a {@link DETECTION_TIMEOUT_MS} timeout per request and treats any
- * network error or non-2xx response as "not running". Never throws.
+ * Returns:
+ * - `{ kind: 'healthy' }` — 2xx response.
+ * - `{ kind: 'basepath', basePath }` — 302 whose Location ends with
+ *   `/api/status`, indicating a random basePath prefix (e.g. `/fxz`).
+ * - `{ kind: 'down' }` — any other status, network error, or 302 with an
+ *   unrecognised Location.
+ *
+ * Never throws.
  */
-export async function detectServices(
+export async function probeKibana(
   kibanaUrl: string,
-  elasticsearchUrl: string,
   credentials: ElasticCredentials,
-): Promise<{ kibana: boolean; elasticsearch: boolean }> {
+): Promise<KibanaProbeResult> {
   const token = Buffer.from(
     `${credentials.username}:${credentials.password}`,
   ).toString('base64');
   const headers = { Authorization: `Basic ${token}` };
 
-  const [kibana, elasticsearch] = await Promise.all([
-    axios
-      .get<unknown>(`${kibanaUrl}/api/status`, {
-        headers,
-        timeout: DETECTION_TIMEOUT_MS,
-      })
-      .then(() => true)
-      .catch(() => false),
+  try {
+    const response = await axios.get<unknown>(`${kibanaUrl}/api/status`, {
+      headers,
+      timeout: DETECTION_TIMEOUT_MS,
+      maxRedirects: 0,
+      validateStatus: () => true,
+    });
+
+    if (response.status >= 200 && response.status < 300) {
+      return { kind: 'healthy' };
+    }
+
+    if (response.status === 302) {
+      const location =
+        (response.headers as Record<string, string | undefined>)['location'] ?? '';
+      const suffix = '/api/status';
+      if (location.endsWith(suffix)) {
+        const basePath = location.slice(0, -suffix.length);
+        return { kind: 'basepath', basePath };
+      }
+      return { kind: 'down' };
+    }
+
+    return { kind: 'down' };
+  } catch {
+    return { kind: 'down' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// detectServices
+// ---------------------------------------------------------------------------
+
+/**
+ * Pings Kibana (via {@link probeKibana}) and Elasticsearch to check whether
+ * both services are reachable.
+ *
+ * Returns a {@link ServiceDetectionResult}:
+ * - `{ kind: 'ok', kibana, elasticsearch }` — normal result.
+ * - `{ kind: 'kibana-basepath', basePath }` — Kibana is up but using a random
+ *   basePath; the caller must abort with an actionable error.
+ *
+ * Never throws.
+ */
+export async function detectServices(
+  kibanaUrl: string,
+  elasticsearchUrl: string,
+  credentials: ElasticCredentials,
+): Promise<ServiceDetectionResult> {
+  const token = Buffer.from(
+    `${credentials.username}:${credentials.password}`,
+  ).toString('base64');
+  const headers = { Authorization: `Basic ${token}` };
+
+  const [kibanaProbe, elasticsearch] = await Promise.all([
+    probeKibana(kibanaUrl, credentials),
     axios
       .get<unknown>(`${elasticsearchUrl}/`, {
         headers,
@@ -82,7 +158,15 @@ export async function detectServices(
       .catch(() => false),
   ]);
 
-  return { kibana, elasticsearch };
+  if (kibanaProbe.kind === 'basepath') {
+    return { kind: 'kibana-basepath', basePath: kibanaProbe.basePath };
+  }
+
+  return {
+    kind: 'ok',
+    kibana: kibanaProbe.kind === 'healthy',
+    elasticsearch,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +202,9 @@ export function getServiceCommands(
       },
       kibana: {
         name: 'Kibana',
-        command: 'yarn start',
+        // --no-base-path disables Kibana's random basePath so that all
+        // POST /api/... calls reach Kibana without a path prefix rewrite.
+        command: 'yarn start --no-base-path',
         kibanaDir,
       },
     };
@@ -131,6 +217,7 @@ export function getServiceCommands(
     },
     kibana: {
       name: 'Kibana',
+      // Serverless Kibana does not use a random basePath; no flag needed.
       command: 'yarn serverless-security',
       kibanaDir,
     },
@@ -263,6 +350,30 @@ export async function waitUntilHealthy(opts: WaitUntilHealthyOptions): Promise<v
 }
 
 // ---------------------------------------------------------------------------
+// Error builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a human-readable error message when Kibana is detected running
+ * with a random basePath. Includes the basePath, the Kibana URL, and the
+ * remediation command.
+ */
+function buildBasePathError(
+  kibanaUrl: string,
+  basePath: string,
+  kibanaDir: string,
+): string {
+  return (
+    `Kibana is running with a random basePath ("${basePath}") at ${kibanaUrl}.\n` +
+    `POST requests to /api/... will 404 because Kibana rewrites them to ` +
+    `${basePath}/api/...\n` +
+    `Stop Kibana, then restart it with:\n` +
+    `  yarn start --no-base-path\n` +
+    `(kibanaDir: ${kibanaDir})`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
@@ -271,6 +382,9 @@ export async function waitUntilHealthy(opts: WaitUntilHealthyOptions): Promise<v
  * to auto-start via osascript (macOS only), falling back to an assisted
  * manual-start flow with health polling. Never returns until both services
  * are healthy (or until a timeout throws).
+ *
+ * Throws immediately if Kibana is reachable but running with a random
+ * basePath (which would break all subsequent API calls).
  */
 export async function ensureServicesRunning(
   target: 'local-stateful' | 'local-serverless',
@@ -279,8 +393,11 @@ export async function ensureServicesRunning(
   elasticsearchUrl: string,
   credentials: ElasticCredentials,
 ): Promise<AutoStartResult> {
-  // 1. Quick check — both already running
+  // 1. Quick check — both already running (or fast-fail on basePath)
   const initial = await detectServices(kibanaUrl, elasticsearchUrl, credentials);
+  if (initial.kind === 'kibana-basepath') {
+    throw new Error(buildBasePathError(kibanaUrl, initial.basePath, kibanaDir));
+  }
   if (initial.kibana && initial.elasticsearch) {
     return { method: 'already-running', kibana: true, elasticsearch: true };
   }
@@ -291,11 +408,11 @@ export async function ensureServicesRunning(
 
   const pingEs = async (): Promise<boolean> => {
     const s = await detectServices(kibanaUrl, elasticsearchUrl, credentials);
-    return s.elasticsearch;
+    return s.kind === 'ok' && s.elasticsearch;
   };
   const pingKibana = async (): Promise<boolean> => {
     const s = await detectServices(kibanaUrl, elasticsearchUrl, credentials);
-    return s.kibana;
+    return s.kind === 'ok' && s.kibana;
   };
 
   // 2. Try to write startup scripts then launch via osascript

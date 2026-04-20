@@ -14,6 +14,7 @@ import * as inquirer from 'inquirer';
 
 import {
   detectServices,
+  probeKibana,
   getServiceCommands,
   escapeSingleQuoted,
   writeStartupScript,
@@ -22,7 +23,7 @@ import {
   ensureServicesRunning,
 } from '@runners/local-services';
 import type { ElasticCredentials, } from '@types-local/index';
-import type { ServiceCommand } from '@runners/local-services';
+import type { ServiceCommand, KibanaProbeResult, ServiceDetectionResult } from '@runners/local-services';
 
 // ---------------------------------------------------------------------------
 // Mocked references
@@ -123,57 +124,72 @@ beforeEach(() => {
 // ===========================================================================
 
 describe('detectServices', () => {
-  it('returns { kibana: true, elasticsearch: true } when both respond 2xx', async () => {
+  it('returns { kind: "ok", kibana: true, elasticsearch: true } when both respond 2xx', async () => {
     mockedAxios.get
-      .mockResolvedValueOnce({ status: 200, data: {} }) // kibana /api/status
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: {} }) // probeKibana
       .mockResolvedValueOnce({ status: 200, data: {} }); // es /
 
-    const result = await detectServices(KIBANA_URL, ES_URL, CREDS);
+    const result: ServiceDetectionResult = await detectServices(KIBANA_URL, ES_URL, CREDS);
 
-    expect(result).toEqual({ kibana: true, elasticsearch: true });
+    expect(result).toEqual({ kind: 'ok', kibana: true, elasticsearch: true });
   });
 
-  it('returns { kibana: false, elasticsearch: false } when both are unreachable', async () => {
+  it('returns { kind: "ok", kibana: false, elasticsearch: false } when both are unreachable', async () => {
     mockedAxios.get
       .mockRejectedValueOnce(new Error('ECONNREFUSED'))
       .mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
     const result = await detectServices(KIBANA_URL, ES_URL, CREDS);
 
-    expect(result).toEqual({ kibana: false, elasticsearch: false });
+    expect(result).toEqual({ kind: 'ok', kibana: false, elasticsearch: false });
   });
 
-  it('returns { kibana: false, elasticsearch: true } when only Kibana is down', async () => {
+  it('returns { kind: "ok", kibana: false, elasticsearch: true } when only Kibana is down', async () => {
     mockedAxios.get
-      .mockRejectedValueOnce(new Error('ECONNREFUSED')) // kibana fails
+      .mockRejectedValueOnce(new Error('ECONNREFUSED')) // probeKibana → down
       .mockResolvedValueOnce({ status: 200, data: {} }); // es ok
 
     const result = await detectServices(KIBANA_URL, ES_URL, CREDS);
 
-    expect(result).toEqual({ kibana: false, elasticsearch: true });
+    expect(result).toEqual({ kind: 'ok', kibana: false, elasticsearch: true });
   });
 
-  it('returns { kibana: true, elasticsearch: false } when only ES is down', async () => {
+  it('returns { kind: "ok", kibana: true, elasticsearch: false } when only ES is down', async () => {
     mockedAxios.get
-      .mockResolvedValueOnce({ status: 200, data: {} }) // kibana ok
+      .mockResolvedValueOnce({ status: 200, headers: {}, data: {} }) // probeKibana → healthy
       .mockRejectedValueOnce(new Error('ECONNREFUSED')); // es fails
 
     const result = await detectServices(KIBANA_URL, ES_URL, CREDS);
 
-    expect(result).toEqual({ kibana: true, elasticsearch: false });
+    expect(result).toEqual({ kind: 'ok', kibana: true, elasticsearch: false });
   });
 
-  it('never throws — axios rejection becomes false', async () => {
+  it('never throws — axios rejection becomes { kind: "ok", kibana: false, elasticsearch: false }', async () => {
     mockedAxios.get.mockRejectedValue(new Error('network timeout'));
 
     await expect(detectServices(KIBANA_URL, ES_URL, CREDS)).resolves.toEqual({
+      kind: 'ok',
       kibana: false,
       elasticsearch: false,
     });
   });
 
+  it('returns { kind: "kibana-basepath" } when Kibana redirects with a basePath prefix', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: { location: '/fxz/api/status' },
+        data: '',
+      }) // probeKibana → basepath
+      .mockResolvedValueOnce({ status: 200, data: {} }); // es
+
+    const result = await detectServices(KIBANA_URL, ES_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'kibana-basepath', basePath: '/fxz' });
+  });
+
   it('pings Kibana /api/status endpoint', async () => {
-    mockedAxios.get.mockResolvedValue({ status: 200, data: {} });
+    mockedAxios.get.mockResolvedValue({ status: 200, headers: {}, data: {} });
 
     await detectServices(KIBANA_URL, ES_URL, CREDS);
 
@@ -184,7 +200,7 @@ describe('detectServices', () => {
   });
 
   it('pings Elasticsearch / endpoint', async () => {
-    mockedAxios.get.mockResolvedValue({ status: 200, data: {} });
+    mockedAxios.get.mockResolvedValue({ status: 200, headers: {}, data: {} });
 
     await detectServices(KIBANA_URL, ES_URL, CREDS);
 
@@ -195,7 +211,7 @@ describe('detectServices', () => {
   });
 
   it('sends Basic Auth header with correct credentials', async () => {
-    mockedAxios.get.mockResolvedValue({ status: 200, data: {} });
+    mockedAxios.get.mockResolvedValue({ status: 200, headers: {}, data: {} });
 
     await detectServices(KIBANA_URL, ES_URL, CREDS);
 
@@ -209,7 +225,7 @@ describe('detectServices', () => {
   });
 
   it('uses a 3-second timeout for each ping', async () => {
-    mockedAxios.get.mockResolvedValue({ status: 200, data: {} });
+    mockedAxios.get.mockResolvedValue({ status: 200, headers: {}, data: {} });
 
     await detectServices(KIBANA_URL, ES_URL, CREDS);
 
@@ -237,7 +253,7 @@ describe('getServiceCommands', () => {
   it('returns stateful Kibana command for local-stateful', () => {
     const { kibana } = getServiceCommands('local-stateful', DIR);
     expect(kibana.name).toBe('Kibana');
-    expect(kibana.command).toBe('yarn start');
+    expect(kibana.command).toBe('yarn start --no-base-path');
     expect(kibana.kibanaDir).toBe(DIR);
   });
 
@@ -251,6 +267,88 @@ describe('getServiceCommands', () => {
     const { kibana } = getServiceCommands('local-serverless', DIR);
     expect(kibana.name).toBe('Kibana');
     expect(kibana.command).toBe('yarn serverless-security');
+  });
+});
+
+// ===========================================================================
+// probeKibana
+// ===========================================================================
+
+describe('probeKibana', () => {
+  it('returns { kind: "healthy" } when Kibana responds 200', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+
+    const result: KibanaProbeResult = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'healthy' });
+  });
+
+  it('returns { kind: "basepath", basePath } when Kibana sends 302 with matching location', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      status: 302,
+      headers: { location: '/fxz/api/status' },
+      data: '',
+    });
+
+    const result = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'basepath', basePath: '/fxz' });
+  });
+
+  it('returns { kind: "down" } when 302 has a location that does not end with /api/status', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      status: 302,
+      headers: { location: '/some/other/path' },
+      data: '',
+    });
+
+    const result = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'down' });
+  });
+
+  it('returns { kind: "down" } when Kibana is unreachable (ECONNREFUSED)', async () => {
+    mockedAxios.get.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const result = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'down' });
+  });
+
+  it('returns { kind: "down" } when Kibana responds with a non-2xx non-302 status', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ status: 500, headers: {}, data: 'Server Error' });
+
+    const result = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'down' });
+  });
+
+  it('uses maxRedirects: 0 and validateStatus that always returns true to capture redirects', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ status: 200, headers: {}, data: {} });
+
+    await probeKibana(KIBANA_URL, CREDS);
+
+    const config = mockedAxios.get.mock.calls[0]?.[1] as Record<string, unknown>;
+    const validateStatus = config?.['validateStatus'] as
+      | ((status: number) => boolean)
+      | undefined;
+    expect(typeof validateStatus).toBe('function');
+    // validateStatus always returns true so axios never throws on redirects
+    expect(validateStatus?.(200)).toBe(true);
+    expect(validateStatus?.(302)).toBe(true);
+    expect(validateStatus?.(500)).toBe(true);
+  });
+
+  it('returns { kind: "down" } when 302 has no location header', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      status: 302,
+      headers: {},
+      data: '',
+    });
+
+    const result = await probeKibana(KIBANA_URL, CREDS);
+
+    expect(result).toEqual({ kind: 'down' });
   });
 });
 
@@ -698,6 +796,34 @@ describe('ensureServicesRunning', () => {
     expect(result.method).toBe('assisted');
     expect(mockedSpawn).not.toHaveBeenCalled();
     expect(mockedInquirer.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws an actionable error when Kibana is running with a random basePath', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: { location: '/fxz/api/status' },
+        data: '',
+      }) // probeKibana → basepath
+      .mockResolvedValueOnce({ status: 200, data: {} }); // ES
+
+    await expect(
+      ensureServicesRunning('local-stateful', '/kb', KIBANA_URL, ES_URL, CREDS),
+    ).rejects.toThrow('/fxz');
+  });
+
+  it('basePath error message includes --no-base-path instruction', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        status: 302,
+        headers: { location: '/abc/api/status' },
+        data: '',
+      })
+      .mockResolvedValueOnce({ status: 200, data: {} });
+
+    await expect(
+      ensureServicesRunning('local-stateful', '/kb', KIBANA_URL, ES_URL, CREDS),
+    ).rejects.toThrow('--no-base-path');
   });
 
   it('Kibana only down — uses kibanaScriptPath as first script, assisted shows single terminal', async () => {
