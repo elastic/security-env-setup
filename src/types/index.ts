@@ -103,9 +103,15 @@ export interface InstallPrebuiltRulesResult {
   summary: PrebuiltRulesInstallationSummary;
 }
 
-export interface BulkRuleActionResponse {
-  success: boolean;
-  rules_count: number;
+/**
+ * Aggregated result of the paginated bulk-enable flow.
+ * `enabled` is the sum of `rules_count` across all chunk responses;
+ * `chunks` is the number of `_bulk_action` POST calls issued.
+ */
+export interface BulkEnableImmutableRulesResult {
+  total: number;
+  enabled: number;
+  chunks: number;
 }
 
 export type DocsGeneratorMode = 'stateful' | 'serverless';

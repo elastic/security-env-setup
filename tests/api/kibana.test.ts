@@ -15,7 +15,7 @@ import {
   installSampleData,
 } from '@api/kibana';
 import type {
-  BulkRuleActionResponse,
+  BulkEnableImmutableRulesResult,
   ElasticCredentials,
   InstallPrebuiltRulesResult,
   KibanaSpace,
@@ -423,59 +423,125 @@ describe('installPrebuiltRules', () => {
 // ---------------------------------------------------------------------------
 
 describe('bulkEnableImmutableRules', () => {
-  const BULK_RESPONSE: BulkRuleActionResponse = {
-    success: true,
-    rules_count: 750,
-  };
+  /** Build an array of fake { id } rule objects for mock responses. */
+  function makeRules(n: number, offset = 0): Array<{ id: string }> {
+    return Array.from({ length: n }, (_, i) => ({ id: `rule-${String(offset + i)}` }));
+  }
 
-  it('returns the parsed response on success', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+  /** Prime GET (find pages) and POST (bulk chunks) mocks for a single-chunk scenario. */
+  function mockSingleChunk(count: number): void {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: { total: count, data: makeRules(count) },
+    });
+    mockedAxios.post.mockResolvedValueOnce({
+      data: { success: true, rules_count: count },
+    });
+  }
+
+  // ── Happy path: single chunk ──────────────────────────────────────────────
+
+  it('returns { total, enabled, chunks: 1 } for a single page under 1000 rules', async () => {
+    mockSingleChunk(500);
+    const result: BulkEnableImmutableRulesResult = await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(result).toEqual({ total: 500, enabled: 500, chunks: 1 });
+  });
+
+  it('makes exactly one GET and one POST for a single chunk', async () => {
+    mockSingleChunk(500);
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Happy path: multiple pages + multiple chunks (2038 rules) ────────────
+
+  it('paginates _find across 3 pages and issues 3 bulk-action chunks for 2038 rules', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000, 0) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000, 1000) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(38, 2000) } });
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: { success: true, rules_count: 1000 } })
+      .mockResolvedValueOnce({ data: { success: true, rules_count: 1000 } })
+      .mockResolvedValueOnce({ data: { success: true, rules_count: 38 } });
+
     const result = await bulkEnableImmutableRules(KIBANA_URL, CREDS);
-    expect(result).toEqual(BULK_RESPONSE);
+
+    expect(result).toEqual({ total: 2038, enabled: 2038, chunks: 3 });
+    expect(mockedAxios.get).toHaveBeenCalledTimes(3);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(3);
   });
 
-  it('posts to the base path with no space prefix for the default space', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
-    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'default');
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/api/detection_engine/rules/_bulk_action`,
-      expect.anything(),
-      expect.anything(),
-    );
+  // ── Zero rules ────────────────────────────────────────────────────────────
+
+  it('returns { total: 0, enabled: 0, chunks: 0 } and never calls POST when no rules found', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: { total: 0, data: [] } });
+    const result = await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(result).toEqual({ total: 0, enabled: 0, chunks: 0 });
+    expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 
-  it('posts to /s/<id>/api/... for a non-default space', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
-    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'security');
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/s/security/api/detection_engine/rules/_bulk_action`,
-      expect.anything(),
-      expect.anything(),
-    );
+  it('stops pagination when first page data is unexpectedly empty even if total > 0', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: { total: 100, data: [] } });
+    const result = await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    expect(result).toEqual({ total: 0, enabled: 0, chunks: 0 });
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
   });
 
-  it('posts to the base path with no space prefix when spaceId is omitted', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+  // ── Pagination URL assertions ─────────────────────────────────────────────
+
+  it('_find GETs include page=1, page=2, page=3 in order for 3-page result', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000, 1000) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(38, 2000) } });
+    mockedAxios.post
+      .mockResolvedValue({ data: { success: true, rules_count: 1 } });
+
     await bulkEnableImmutableRules(KIBANA_URL, CREDS);
-    expect(mockedAxios.post).toHaveBeenCalledWith(
-      `${KIBANA_URL}/api/detection_engine/rules/_bulk_action`,
-      expect.anything(),
-      expect.anything(),
-    );
+
+    const getUrls = mockedAxios.get.mock.calls.map((c) => c[0] as string);
+    expect(getUrls[0]).toContain('page=1');
+    expect(getUrls[1]).toContain('page=2');
+    expect(getUrls[2]).toContain('page=3');
   });
 
-  it('sends the correct query and action in the request body', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+  it('_find URLs include the URL-encoded immutability filter', async () => {
+    mockSingleChunk(10);
     await bulkEnableImmutableRules(KIBANA_URL, CREDS);
-    const [, body] = mockedAxios.post.mock.calls[0] as [string, Record<string, string>];
-    expect(body).toEqual({
-      query: 'alert.attributes.params.immutable: true',
-      action: 'enable',
+    const [getUrl] = mockedAxios.get.mock.calls[0] as [string];
+    expect(getUrl).toContain('filter=');
+    expect(getUrl).toContain(encodeURIComponent('alert.attributes.params.immutable: true'));
+  });
+
+  // ── Bulk-action body ──────────────────────────────────────────────────────
+
+  it('each _bulk_action POST body contains action: "enable" and an ids array', async () => {
+    mockSingleChunk(3);
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    const [, body] = mockedAxios.post.mock.calls[0] as [string, { action: string; ids: string[] }];
+    expect(body.action).toBe('enable');
+    expect(Array.isArray(body.ids)).toBe(true);
+    expect(body.ids).toHaveLength(3);
+  });
+
+  // ── Headers ───────────────────────────────────────────────────────────────
+
+  it('_find GET uses all required headers including elastic-api-version 2023-10-31', async () => {
+    mockSingleChunk(10);
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS);
+    const [, config] = mockedAxios.get.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(config.headers).toMatchObject({
+      Authorization: expectedBasicAuth(),
+      'Content-Type': 'application/json',
+      'kbn-xsrf': 'true',
+      'x-elastic-internal-origin': 'Kibana',
+      'elastic-api-version': '2023-10-31',
     });
   });
 
-  it('sends all four required headers', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: BULK_RESPONSE });
+  it('_bulk_action POST uses all required headers including elastic-api-version 2023-10-31', async () => {
+    mockSingleChunk(10);
     await bulkEnableImmutableRules(KIBANA_URL, CREDS);
     const [, , config] = mockedAxios.post.mock.calls[0] as [
       string,
@@ -491,20 +557,63 @@ describe('bulkEnableImmutableRules', () => {
     });
   });
 
-  it('throws via handleKibanaError when the request fails', async () => {
-    const err = { isAxiosError: true, response: { status: 500 }, message: 'Server error' };
-    mockedAxios.post.mockRejectedValueOnce(err);
-    mockedAxios.isAxiosError.mockReturnValue(true);
-    await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow(
-      'Kibana API request failed',
-    );
+  // ── Space prefix ──────────────────────────────────────────────────────────
+
+  it('default space — both _find and _bulk_action URLs have no space prefix', async () => {
+    mockSingleChunk(5);
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'default');
+    const [findUrl] = mockedAxios.get.mock.calls[0] as [string];
+    const [bulkUrl] = mockedAxios.post.mock.calls[0] as [string];
+    expect(findUrl).toContain(`${KIBANA_URL}/api/`);
+    expect(findUrl).not.toContain('/s/');
+    expect(bulkUrl).toBe(`${KIBANA_URL}/api/detection_engine/rules/_bulk_action`);
   });
 
-  it('throws Invalid credentials on 401', async () => {
+  it('custom space — both _find and _bulk_action URLs include the /s/<id> prefix', async () => {
+    mockSingleChunk(5);
+    await bulkEnableImmutableRules(KIBANA_URL, CREDS, 'security');
+    const [findUrl] = mockedAxios.get.mock.calls[0] as [string];
+    const [bulkUrl] = mockedAxios.post.mock.calls[0] as [string];
+    expect(findUrl).toContain(`${KIBANA_URL}/s/security/api/`);
+    expect(bulkUrl).toBe(`${KIBANA_URL}/s/security/api/detection_engine/rules/_bulk_action`);
+  });
+
+  // ── Error handling ────────────────────────────────────────────────────────
+
+  it('_find failure — throws with (find) context and never calls _bulk_action', async () => {
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'ES down' };
+    mockedAxios.get.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+
+    await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow(
+      'bulkEnableImmutableRules (find)',
+    );
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('_find 401 — throws Invalid credentials', async () => {
     const err = { isAxiosError: true, response: { status: 401 }, message: 'Unauthorized' };
-    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.get.mockRejectedValueOnce(err);
     mockedAxios.isAxiosError.mockReturnValue(true);
     await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow('Invalid credentials');
+  });
+
+  it('_bulk_action failure on 2nd chunk — throws with (bulk_action) context', async () => {
+    mockedAxios.get
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(1000, 1000) } })
+      .mockResolvedValueOnce({ data: { total: 2038, data: makeRules(38, 2000) } });
+
+    const err = { isAxiosError: true, response: { status: 500 }, message: 'Rule conflict' };
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: { success: true, rules_count: 1000 } }) // chunk 1 ok
+      .mockRejectedValueOnce(err); // chunk 2 fails
+    mockedAxios.isAxiosError.mockReturnValue(true);
+
+    await expect(bulkEnableImmutableRules(KIBANA_URL, CREDS)).rejects.toThrow(
+      'bulkEnableImmutableRules (bulk_action)',
+    );
+    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -197,7 +197,10 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
       `(${String(installResult.packages.length)} Fleet packages synced).`,
   );
   const enableResult = await bulkEnableImmutableRules(answers.kibanaUrl, credentials, spaceArg);
-  logger.info(`Enabled ${String(enableResult.rules_count)} immutable rules.`);
+  logger.info(
+    `Enabled ${String(enableResult.enabled)}/${String(enableResult.total)} immutable rules ` +
+      `(${String(enableResult.chunks)} batches).`,
+  );
 
   // ── Step 8/10: Kibana internal generator ──────────────────────────────────
   logger.step(8, TOTAL_STEPS, 'Running Kibana internal data generator…');

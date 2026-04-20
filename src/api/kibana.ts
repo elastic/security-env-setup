@@ -1,7 +1,7 @@
 import axios from 'axios';
 import ora from 'ora';
 import type {
-  BulkRuleActionResponse,
+  BulkEnableImmutableRulesResult,
   ElasticCredentials,
   InstallPrebuiltRulesResult,
   KibanaSpace,
@@ -21,6 +21,18 @@ const REQUEST_TIMEOUT_MS = 30_000;
 // ---------------------------------------------------------------------------
 // Internal API response / request types — never exported
 // ---------------------------------------------------------------------------
+
+/** One page of results from `GET /api/detection_engine/rules/_find`. */
+interface FindRulesPage {
+  total: number;
+  data: Array<{ id: string }>;
+}
+
+/** Response from a single `POST /api/detection_engine/rules/_bulk_action` chunk. */
+interface BulkActionChunkResponse {
+  success: boolean;
+  rules_count: number;
+}
 
 /** Shape of a single space object returned by the Kibana Spaces API. */
 interface KibanaSpaceApiShape {
@@ -308,14 +320,22 @@ export async function installPrebuiltRules(
 
 /**
  * Bulk-enables all immutable (prebuilt) detection rules for the given space.
- * Posts to `/api/detection_engine/rules/_bulk_action` with the four headers
- * required by the detection-engine API.
+ *
+ * Kibana's `_bulk_action` endpoint rejects arrays larger than 1 000 entries,
+ * so this function:
+ *   1. Pages through `GET /api/detection_engine/rules/_find` (page size 1 000)
+ *      to collect every immutable rule ID.
+ *   2. Splits the ID list into chunks of 1 000 and issues one
+ *      `POST /api/detection_engine/rules/_bulk_action` per chunk.
+ *
+ * Returns an aggregated {@link BulkEnableImmutableRulesResult} describing
+ * how many rules were found, enabled, and in how many batches.
  */
 export async function bulkEnableImmutableRules(
   kibanaUrl: string,
   credentials: ElasticCredentials,
   spaceId?: string,
-): Promise<BulkRuleActionResponse> {
+): Promise<BulkEnableImmutableRulesResult> {
   const headers = {
     ...buildKibanaHeaders(credentials),
     'x-elastic-internal-origin': 'Kibana',
@@ -323,16 +343,57 @@ export async function bulkEnableImmutableRules(
   };
   const prefix = buildSpacePrefix(spaceId);
 
-  try {
-    const response = await axios.post<BulkRuleActionResponse>(
-      `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`,
-      { query: 'alert.attributes.params.immutable: true', action: 'enable' },
-      { headers, timeout: REQUEST_TIMEOUT_MS },
-    );
-    return response.data;
-  } catch (err) {
-    handleKibanaError(err, 'bulkEnableImmutableRules', kibanaUrl);
+  const PAGE_SIZE = 1000;
+  const CHUNK_SIZE = 1000;
+  const filterEncoded = encodeURIComponent('alert.attributes.params.immutable: true');
+
+  // ── Step 1: Paginate _find to collect all immutable rule IDs ───────────────
+  const ids: string[] = [];
+  let page = 1;
+  for (;;) {
+    const findUrl =
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/_find` +
+      `?per_page=${PAGE_SIZE}&page=${page}&filter=${filterEncoded}`;
+
+    const findRes = await axios
+      .get<FindRulesPage>(findUrl, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) =>
+        handleKibanaError(err, 'bulkEnableImmutableRules (find)', kibanaUrl),
+      );
+
+    ids.push(...findRes.data.data.map((r) => r.id));
+
+    if (ids.length >= findRes.data.total || findRes.data.data.length === 0) break;
+    page += 1;
   }
+
+  if (ids.length === 0) {
+    return { total: 0, enabled: 0, chunks: 0 };
+  }
+
+  // ── Step 2: Enable in chunks of 1 000 ─────────────────────────────────────
+  const bulkUrl = `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`;
+  let enabled = 0;
+  let chunks = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+
+    const bulkRes = await axios
+      .post<BulkActionChunkResponse>(
+        bulkUrl,
+        { action: 'enable', ids: chunk },
+        { headers, timeout: REQUEST_TIMEOUT_MS },
+      )
+      .catch((err: unknown) =>
+        handleKibanaError(err, 'bulkEnableImmutableRules (bulk_action)', kibanaUrl),
+      );
+
+    enabled += bulkRes.data.rules_count;
+    chunks += 1;
+  }
+
+  return { total: ids.length, enabled, chunks };
 }
 
 /**
