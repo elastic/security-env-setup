@@ -4,6 +4,8 @@ jest.mock('@api/cloud');
 jest.mock('@api/kibana');
 jest.mock('@runners/scripts');
 jest.mock('@config/store');
+jest.mock('@commands/create-local');
+jest.mock('@commands/clean');
 
 import ora from 'ora';
 import { runWizard } from '@wizard/prompts';
@@ -11,7 +13,10 @@ import { createDeployment, waitForDeployment } from '@api/cloud';
 import { createSpaces, initializeSecurityApp } from '@api/kibana';
 import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '@runners/scripts';
 import { hasApiKey } from '@config/store';
+import { runLocalFlow } from '@commands/create-local';
+import { runCleanCore } from '@commands/clean';
 import { createCommand } from '@commands/create';
+import type { LocalWizardAnswers, CleanResult } from '@types-local/index';
 
 const mockSpinner = {
   start: jest.fn().mockReturnThis(),
@@ -32,6 +37,8 @@ const mockedRunAllDataGen = runAllDataGeneration as jest.MockedFunction<typeof r
 const mockedRunGenerateAttacks = runGenerateAttacks as jest.MockedFunction<typeof runGenerateAttacks>;
 const mockedRunGenerateCases = runGenerateCases as jest.MockedFunction<typeof runGenerateCases>;
 const mockedHasApiKey = hasApiKey as jest.MockedFunction<typeof hasApiKey>;
+const mockedRunLocalFlow = runLocalFlow as jest.MockedFunction<typeof runLocalFlow>;
+const mockedRunCleanCore = runCleanCore as jest.MockedFunction<typeof runCleanCore>;
 
 const WIZARD_RESULT = {
   config: {
@@ -47,6 +54,20 @@ const WIZARD_RESULT = {
     },
   },
   environment: 'prod' as const,
+  target: 'elastic-cloud' as const,
+};
+
+const LOCAL_ANSWERS: LocalWizardAnswers = {
+  target: 'local-stateful',
+  kibanaDir: '/home/user/kibana',
+  kibanaUrl: 'http://localhost:5601',
+  elasticsearchUrl: 'http://localhost:9200',
+  username: 'elastic',
+  password: 'changeme',
+  space: 'default',
+  volume: 'medium',
+  docsGeneratorDir: '/home/user/security-documents-generator',
+  installSampleData: false,
 };
 
 const INITIAL_RESULT = {
@@ -85,6 +106,15 @@ beforeEach(() => {
   consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
   mockedHasApiKey.mockReturnValue(true);
+  mockedRunLocalFlow.mockResolvedValue(undefined);
+  mockedRunCleanCore.mockResolvedValue({
+    rulesDeleted: 0,
+    rulesSkipped: 0,
+    casesDeleted: 0,
+    casesSkipped: 0,
+    spacesDeleted: 0,
+    spacesSkipped: 0,
+  } satisfies CleanResult);
   mockedRunWizard.mockResolvedValue(WIZARD_RESULT);
   mockedCreateDeployment.mockResolvedValue(INITIAL_RESULT);
   mockedWaitForDeployment.mockResolvedValue(RUNNING_RESULT);
@@ -111,6 +141,21 @@ afterAll(() => {
 });
 
 describe('create command', () => {
+  it('delegates to runLocalFlow for local-stateful and skips deployment', async () => {
+    mockedRunWizard.mockResolvedValue(LOCAL_ANSWERS);
+    await invokeCreate();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
+    expect(mockedCreateDeployment).not.toHaveBeenCalled();
+  });
+
+  it('delegates to runLocalFlow for local-serverless and skips deployment', async () => {
+    const serverlessAnswers: LocalWizardAnswers = { ...LOCAL_ANSWERS, target: 'local-serverless' };
+    mockedRunWizard.mockResolvedValue(serverlessAnswers);
+    await invokeCreate();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(serverlessAnswers);
+    expect(mockedCreateDeployment).not.toHaveBeenCalled();
+  });
+
   it('runs the full happy path — wizard → create → wait → spaces → security init', async () => {
     await invokeCreate();
 
@@ -326,5 +371,95 @@ describe('create command', () => {
     await invokeCreate();
     const output = consoleSpy.mock.calls.flat().join('\n');
     expect(output).not.toContain('Data spaces');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helper that accepts explicit CLI args (for flag testing)
+// ---------------------------------------------------------------------------
+
+async function invokeCreateWithArgs(args: string[]): Promise<void> {
+  await createCommand.parseAsync(args, { from: 'user' });
+  await new Promise((r) => setTimeout(r, 10));
+}
+
+describe('with --clean flag', () => {
+  const CLEAN_ANSWERS = {
+    target: 'local-stateful' as const,
+    kibanaUrl: LOCAL_ANSWERS.kibanaUrl,
+    elasticsearchUrl: LOCAL_ANSWERS.elasticsearchUrl,
+    username: LOCAL_ANSWERS.username,
+    password: LOCAL_ANSWERS.password,
+    space: LOCAL_ANSWERS.space,
+  };
+
+  beforeEach(() => {
+    // Commander persists option values between parseAsync calls on the same instance.
+    // Reset all flags before each test so they start from a clean slate.
+    createCommand.setOptionValue('clean', undefined);
+    createCommand.setOptionValue('dryRun', undefined);
+    createCommand.setOptionValue('yes', undefined);
+
+    // Wizard always returns a local-stateful result for these tests
+    mockedRunWizard.mockResolvedValue(LOCAL_ANSWERS);
+  });
+
+  it('calls runCleanCore then runLocalFlow when --clean is passed without --dry-run', async () => {
+    await invokeCreateWithArgs(['--clean']);
+
+    expect(mockedRunCleanCore).toHaveBeenCalledTimes(1);
+    expect(mockedRunCleanCore).toHaveBeenCalledWith(CLEAN_ANSWERS, {
+      dryRun: undefined,
+      yes: undefined,
+    });
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
+  });
+
+  it('calls runCleanCore but NOT runLocalFlow when --clean --dry-run is passed', async () => {
+    await invokeCreateWithArgs(['--clean', '--dry-run']);
+
+    expect(mockedRunCleanCore).toHaveBeenCalledTimes(1);
+    expect(mockedRunCleanCore).toHaveBeenCalledWith(CLEAN_ANSWERS, {
+      dryRun: true,
+      yes: undefined,
+    });
+    expect(mockedRunLocalFlow).not.toHaveBeenCalled();
+  });
+
+  it('does not call runCleanCore when --clean is not passed', async () => {
+    await invokeCreateWithArgs([]);
+
+    expect(mockedRunCleanCore).not.toHaveBeenCalled();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
+  });
+
+  it('sets exitCode and skips runLocalFlow when runCleanCore rejects', async () => {
+    mockedRunCleanCore.mockRejectedValueOnce(new Error('scan failed'));
+
+    await invokeCreateWithArgs(['--clean']);
+
+    expect(mockedRunLocalFlow).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const errOutput = consoleErrorSpy.mock.calls.flat().join('');
+    expect(errOutput).toContain('scan failed');
+  });
+});
+
+describe('elastic-cloud target with clean flags', () => {
+  beforeEach(() => {
+    createCommand.setOptionValue('clean', undefined);
+    createCommand.setOptionValue('dryRun', undefined);
+    createCommand.setOptionValue('yes', undefined);
+    mockedRunWizard.mockResolvedValue(WIZARD_RESULT);
+  });
+
+  it('warns and ignores clean flags for elastic-cloud', async () => {
+    await invokeCreateWithArgs(['--clean', '--dry-run', '--yes']);
+
+    expect(mockedRunCleanCore).not.toHaveBeenCalled();
+    expect(mockedCreateDeployment).toHaveBeenCalledTimes(1);
+    const warnOutput = consoleWarnSpy.mock.calls.flat().join('\n');
+    expect(warnOutput).toContain('--clean, --dry-run, --yes');
+    expect(warnOutput).toContain('only supported with local-stateful target');
   });
 });

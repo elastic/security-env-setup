@@ -1,6 +1,13 @@
 import axios from 'axios';
 import ora from 'ora';
-import type { ElasticCredentials, KibanaSpace } from '../types';
+import type {
+  BulkEnableImmutableRulesResult,
+  ElasticCredentials,
+  InstallPrebuiltRulesResult,
+  KibanaSpace,
+  PrebuiltRulesBootstrapResponse,
+  PrebuiltRulesInstallationResponse,
+} from '../types';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
 
@@ -14,6 +21,18 @@ const REQUEST_TIMEOUT_MS = 30_000;
 // ---------------------------------------------------------------------------
 // Internal API response / request types — never exported
 // ---------------------------------------------------------------------------
+
+/** One page of results from `GET /api/detection_engine/rules/_find`. */
+interface FindRulesPage {
+  total: number;
+  data: Array<{ id: string }>;
+}
+
+/** Response from a single `POST /api/detection_engine/rules/_bulk_action` chunk. */
+interface BulkActionChunkResponse {
+  success: boolean;
+  rules_count: number;
+}
 
 /** Shape of a single space object returned by the Kibana Spaces API. */
 interface KibanaSpaceApiShape {
@@ -99,6 +118,15 @@ function handleKibanaError(err: unknown, context: string, kibanaUrl: string): ne
     }
   }
   throw new Error(`${context}: ${getErrorMessage(err)}`);
+}
+
+/**
+ * Returns the Kibana URL path prefix for the given space.
+ * The default space has no prefix; all other spaces use `/s/<id>`.
+ */
+function buildSpacePrefix(spaceId?: string): string {
+  if (!spaceId || spaceId === 'default') return '';
+  return `/s/${spaceId}`;
 }
 
 /** Maps a raw Kibana API space shape to the canonical `KibanaSpace` type. */
@@ -240,6 +268,168 @@ export async function deleteSpace(
 }
 
 /**
+ * Installs all Elastic prebuilt detection rules for the given space using the
+ * two-step internal API introduced in Kibana 8.14+ (the legacy
+ * `/api/detection_engine/rules/prepackaged` endpoint was removed in 9.x).
+ *
+ * Step 1 — `_bootstrap`: syncs Fleet packages into Kibana.
+ * Step 2 — `_perform_installation`: installs all available prebuilt rules.
+ *
+ * Both endpoints require `elastic-api-version: '1'` (internal versioning —
+ * distinct from the public `2023-10-31` version used by other endpoints).
+ */
+export async function installPrebuiltRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<InstallPrebuiltRulesResult> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '1',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+
+  // Step 1: bootstrap — syncs Fleet packages into Kibana.
+  // 5-minute timeout: on a fresh Kibana boot this endpoint can legitimately
+  // take ~28 s while Kibana finishes warming up internally.
+  const bootstrapResponse = await axios
+    .post<PrebuiltRulesBootstrapResponse>(
+      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/_bootstrap`,
+      {},
+      { headers, timeout: 5 * 60 * 1_000 },
+    )
+    .catch((err: unknown) =>
+      handleKibanaError(err, 'installPrebuiltRules (bootstrap)', kibanaUrl),
+    );
+
+  // Step 2: perform installation — installs all available prebuilt rules.
+  // Same extended timeout: rule installation on a large rule set can be slow.
+  const installResponse = await axios
+    .post<PrebuiltRulesInstallationResponse>(
+      `${kibanaUrl}${prefix}/internal/detection_engine/prebuilt_rules/installation/_perform`,
+      { mode: 'ALL_RULES' },
+      { headers, timeout: 5 * 60 * 1_000 },
+    )
+    .catch((err: unknown) =>
+      handleKibanaError(err, 'installPrebuiltRules (perform)', kibanaUrl),
+    );
+
+  return {
+    packages: [...bootstrapResponse.data.packages],
+    summary: installResponse.data.summary,
+  };
+}
+
+/**
+ * Bulk-enables all immutable (prebuilt) detection rules for the given space.
+ *
+ * Kibana's `_bulk_action` endpoint rejects arrays larger than 1 000 entries,
+ * so this function:
+ *   1. Pages through `GET /api/detection_engine/rules/_find` (page size 1 000)
+ *      to collect every immutable rule ID.
+ *   2. Splits the ID list into chunks of 1 000 and issues one
+ *      `POST /api/detection_engine/rules/_bulk_action` per chunk.
+ *
+ * Returns an aggregated {@link BulkEnableImmutableRulesResult} describing
+ * how many rules were found, enabled, and in how many batches.
+ */
+export async function bulkEnableImmutableRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<BulkEnableImmutableRulesResult> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+
+  const PAGE_SIZE = 1000;
+  const CHUNK_SIZE = 1000;
+  const filterEncoded = encodeURIComponent('alert.attributes.params.immutable: true');
+
+  // ── Step 1: Paginate _find to collect all immutable rule IDs ───────────────
+  const ids: string[] = [];
+  let page = 1;
+  for (;;) {
+    const findUrl =
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/_find` +
+      `?per_page=${PAGE_SIZE}&page=${page}&filter=${filterEncoded}`;
+
+    const findRes = await axios
+      .get<FindRulesPage>(findUrl, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) =>
+        handleKibanaError(err, 'bulkEnableImmutableRules (find)', kibanaUrl),
+      );
+
+    ids.push(...findRes.data.data.map((r) => r.id));
+
+    if (ids.length >= findRes.data.total || findRes.data.data.length === 0) break;
+    page += 1;
+  }
+
+  if (ids.length === 0) {
+    return { total: 0, enabled: 0, chunks: 0 };
+  }
+
+  // ── Step 2: Enable in chunks of 1 000 ─────────────────────────────────────
+  const bulkUrl = `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`;
+  let enabled = 0;
+  let chunks = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+
+    const bulkRes = await axios
+      .post<BulkActionChunkResponse>(
+        bulkUrl,
+        { action: 'enable', ids: chunk },
+        { headers, timeout: REQUEST_TIMEOUT_MS },
+      )
+      .catch((err: unknown) =>
+        handleKibanaError(err, 'bulkEnableImmutableRules (bulk_action)', kibanaUrl),
+      );
+
+    enabled += bulkRes.data.rules_count;
+    chunks += 1;
+  }
+
+  return { total: ids.length, enabled, chunks };
+}
+
+/**
+ * Installs a Kibana built-in sample dataset (flights, ecommerce, or logs).
+ *
+ * POSTs to `{spacePrefix}/api/sample_data/{dataset}` with an empty body.
+ * HTTP 400 ("already installed") is silently accepted so callers can safely
+ * call this function regardless of the current installation state.
+ */
+export async function installSampleData(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  dataset: 'ecommerce' | 'flights' | 'logs',
+  spaceId?: string,
+): Promise<void> {
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+
+  try {
+    await axios.post<unknown>(
+      `${kibanaUrl}${prefix}/api/sample_data/${dataset}`,
+      {},
+      { headers, timeout: REQUEST_TIMEOUT_MS },
+    );
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 400) {
+      return; // already installed — acceptable
+    }
+    handleKibanaError(err, 'installSampleData', kibanaUrl);
+  }
+}
+
+/**
  * Initialises the Security Solution detection-engine index.
  * Must be called once before data-generation scripts can run.
  * Handles 409 gracefully — the index is already initialised, which is fine.
@@ -266,4 +456,208 @@ export async function initializeSecurityApp(
     spinner.fail('Failed to initialize Security Solution index.');
     handleKibanaError(err, 'initializeSecurityApp', kibanaUrl);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Internal response shapes for clean operations
+// ---------------------------------------------------------------------------
+
+interface FindCasesPage {
+  total: number;
+  cases: Array<{ id: string; title: string }>;
+  page: number;
+  perPage: number;
+}
+
+interface FindCustomRulesPage {
+  total: number;
+  data: Array<{ id: string; name: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Clean operations
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all cases that carry the given tag, paginating as needed.
+ * Pagination: 100 items per page. Terminates when the collected count reaches
+ * `total` or the current page returns zero items (defensive).
+ */
+export async function findCasesByTag(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  tag: string,
+  spaceId?: string,
+): Promise<Array<{ id: string; title: string }>> {
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+  const tagEncoded = encodeURIComponent(tag);
+  const PAGE_SIZE = 100;
+
+  const items: Array<{ id: string; title: string }> = [];
+  let page = 1;
+
+  for (;;) {
+    const url =
+      `${kibanaUrl}${prefix}/api/cases/_find` +
+      `?tags=${tagEncoded}&perPage=${PAGE_SIZE}&page=${page}`;
+
+    const response = await axios
+      .get<FindCasesPage>(url, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) => handleKibanaError(err, 'findCasesByTag', kibanaUrl));
+
+    items.push(...response.data.cases);
+
+    if (items.length >= response.data.total || response.data.cases.length === 0) break;
+    page += 1;
+  }
+
+  return items;
+}
+
+/**
+ * Deletes cases in chunks of 100 using `DELETE /api/cases?ids=<json-array>`.
+ *
+ * - Empty input returns immediately without any HTTP call.
+ * - HTTP 4xx on a chunk: logs a warning and counts the chunk as skipped;
+ *   does NOT throw. Remaining chunks continue.
+ * - Network errors / 5xx propagate via `handleKibanaError`.
+ */
+export async function bulkDeleteCases(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  ids: string[],
+  spaceId?: string,
+): Promise<{ deleted: number; skipped: number }> {
+  if (ids.length === 0) return { deleted: 0, skipped: 0 };
+
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+  const CHUNK_SIZE = 100;
+  let deleted = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+    const idsEncoded = encodeURIComponent(JSON.stringify(chunk));
+    const url = `${kibanaUrl}${prefix}/api/cases?ids=${idsEncoded}`;
+
+    try {
+      await axios.delete<unknown>(url, { headers, timeout: REQUEST_TIMEOUT_MS });
+      deleted += chunk.length;
+    } catch (err) {
+      if (
+        axios.isAxiosError(err) &&
+        err.response?.status !== undefined &&
+        err.response.status >= 400 &&
+        err.response.status < 500
+      ) {
+        logger.warn(
+          `bulkDeleteCases: chunk delete returned HTTP ${String(err.response.status)}: ${err.message}`,
+        );
+        skipped += chunk.length;
+      } else {
+        handleKibanaError(err, 'bulkDeleteCases', kibanaUrl);
+      }
+    }
+  }
+
+  return { deleted, skipped };
+}
+
+/**
+ * Returns all custom (non-prebuilt, `immutable: false`) detection rules for
+ * the given space, paginating as needed (1 000 per page).
+ */
+export async function findCustomRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+  const PAGE_SIZE = 1000;
+  const filterEncoded = encodeURIComponent('alert.attributes.params.immutable: false');
+
+  const items: Array<{ id: string; name: string }> = [];
+  let page = 1;
+
+  for (;;) {
+    const url =
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/_find` +
+      `?per_page=${PAGE_SIZE}&page=${page}&filter=${filterEncoded}`;
+
+    const response = await axios
+      .get<FindCustomRulesPage>(url, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) => handleKibanaError(err, 'findCustomRules', kibanaUrl));
+
+    items.push(...response.data.data);
+
+    if (items.length >= response.data.total || response.data.data.length === 0) break;
+    page += 1;
+  }
+
+  return items;
+}
+
+/**
+ * Bulk-deletes detection rules in chunks of 1 000 using
+ * `POST /api/detection_engine/rules/_bulk_action` with `action: "delete"`.
+ *
+ * - Empty input returns immediately without any HTTP call.
+ * - HTTP 4xx on a chunk: logs a warning and counts the chunk as skipped;
+ *   does NOT throw. Remaining chunks continue.
+ * - Network errors / 5xx propagate via `handleKibanaError`.
+ */
+export async function bulkDeleteRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  ids: string[],
+  spaceId?: string,
+): Promise<{ deleted: number; skipped: number }> {
+  if (ids.length === 0) return { deleted: 0, skipped: 0 };
+
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+  const CHUNK_SIZE = 1000;
+  const bulkUrl = `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`;
+  let deleted = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+
+    try {
+      const response = await axios.post<{ rules_count: number }>(
+        bulkUrl,
+        { action: 'delete', ids: chunk },
+        { headers, timeout: REQUEST_TIMEOUT_MS },
+      );
+      deleted += response.data.rules_count;
+    } catch (err) {
+      if (
+        axios.isAxiosError(err) &&
+        err.response?.status !== undefined &&
+        err.response.status >= 400 &&
+        err.response.status < 500
+      ) {
+        logger.warn(
+          `bulkDeleteRules: chunk delete returned HTTP ${String(err.response.status)}: ${err.message}`,
+        );
+        skipped += chunk.length;
+      } else {
+        handleKibanaError(err, 'bulkDeleteRules', kibanaUrl);
+      }
+    }
+  }
+
+  return { deleted, skipped };
 }

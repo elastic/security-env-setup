@@ -534,6 +534,63 @@ export async function runGenerateCases(
 }
 
 /**
+ * Runs `node generate_cli.js --attacks --cases` inside the security_solution
+ * plugin with volume-scaled parameters for the local-target flow.
+ *
+ * Accepts an explicit `kibanaDir` (the Kibana checkout root), URLs, and
+ * credentials — no implicit env-var reading. Failure propagates to the
+ * caller; the local flow swallows it as a warning so the sequence continues.
+ */
+export async function runKibanaLocalGenerator(
+  kibanaDir: string,
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  opts: {
+    spaceId: string;
+    events: number;
+    hosts: number;
+    users: number;
+  },
+): Promise<void> {
+  const { generateCli, scriptDir } = detectKibanaScriptPaths(kibanaDir);
+
+  if (!fs.existsSync(generateCli)) {
+    throw new Error(`generate_cli.js not found at: ${generateCli}`);
+  }
+
+  if (credentials.password.trim().length > 0) {
+    logger.warn(
+      'Passing Elasticsearch password via --password to generate_cli.js; ' +
+        'this may be visible in process listings while the script runs.',
+    );
+  }
+
+  const args = [
+    '--attacks',
+    '--cases',
+    '--kibanaUrl', kibanaUrl,
+    '--elasticsearchUrl', credentials.url,
+    '--username', credentials.username,
+    '--password', credentials.password,
+    '--events', String(opts.events),
+    '--hosts', String(opts.hosts),
+    '--users', String(opts.users),
+    '--start-date', '7d',
+    '--end-date', 'now',
+    '--spaceId', opts.spaceId,
+    '--max-preview-invocations', '15',
+  ];
+
+  await spawnProcess(
+    'node',
+    [generateCli, ...args],
+    scriptDir,
+    buildScriptEnv(kibanaUrl, credentials),
+    'Running Kibana internal generator (attacks + cases)',
+  );
+}
+
+/**
  * If `msg` contains "Cannot find module" it appends a bootstrap hint so the
  * error surfaced to the user is immediately actionable.
  */
