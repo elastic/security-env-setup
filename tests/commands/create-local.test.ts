@@ -23,7 +23,7 @@ import {
   installDependencies,
   runStandardSequence,
 } from '@runners/docs-generator';
-import { runKibanaLocalGenerator } from '@runners/scripts';
+import { runKibanaLocalGenerator, runGenerateEvents } from '@runners/scripts';
 import { runLocalFlow } from '@commands/create-local';
 import type { LocalWizardAnswers } from '@types-local/index';
 import type { NvmNodeVersion } from '@utils/node-version';
@@ -42,6 +42,7 @@ const mockedWriteConfig = writeConfig as jest.MockedFunction<typeof writeConfig>
 const mockedInstallDependencies = installDependencies as jest.MockedFunction<typeof installDependencies>;
 const mockedRunStandardSequence = runStandardSequence as jest.MockedFunction<typeof runStandardSequence>;
 const mockedRunKibanaLocalGenerator = runKibanaLocalGenerator as jest.MockedFunction<typeof runKibanaLocalGenerator>;
+const mockedRunGenerateEvents = runGenerateEvents as jest.MockedFunction<typeof runGenerateEvents>;
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -112,6 +113,7 @@ beforeEach(() => {
   // bulkEnableImmutableRules is no longer called by the local flow;
   // no default mock value needed — asserting it is never called.
   mockedRunKibanaLocalGenerator.mockResolvedValue(undefined);
+  mockedRunGenerateEvents.mockResolvedValue(undefined);
   mockedEnsureRepoCloned.mockResolvedValue(undefined);
   mockedWriteConfig.mockResolvedValue(undefined);
   mockedInstallDependencies.mockResolvedValue(undefined);
@@ -458,5 +460,58 @@ describe('runLocalFlow — ensureRepoCloned fails', () => {
     mockedEnsureRepoCloned.mockRejectedValueOnce(new Error('git clone failed'));
     await expect(runLocalFlow(BASE_ANSWERS)).rejects.toThrow();
     expect(mockedRunStandardSequence).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runGenerateEvents (step 9 — endpoint resolver trees)
+// ---------------------------------------------------------------------------
+
+describe('runLocalFlow — runGenerateEvents (endpoint event generator)', () => {
+  it('calls runGenerateEvents exactly once on the happy path', async () => {
+    await runLocalFlow(BASE_ANSWERS);
+    expect(mockedRunGenerateEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes kibanaDir, kibanaUrl, and credentials to runGenerateEvents', async () => {
+    await runLocalFlow(BASE_ANSWERS);
+    expect(mockedRunGenerateEvents).toHaveBeenCalledWith(
+      BASE_ANSWERS.kibanaDir,
+      BASE_ANSWERS.kibanaUrl,
+      expect.objectContaining({
+        url: BASE_ANSWERS.elasticsearchUrl,
+        username: BASE_ANSWERS.username,
+        password: BASE_ANSWERS.password,
+      }),
+    );
+  });
+
+  it('runs AFTER runKibanaLocalGenerator and BEFORE ensureRepoCloned', async () => {
+    const order: string[] = [];
+    mockedRunKibanaLocalGenerator.mockImplementation(async () => { order.push('localGen'); });
+    mockedRunGenerateEvents.mockImplementation(async () => { order.push('genEvents'); });
+    mockedEnsureRepoCloned.mockImplementation(async () => { order.push('clone'); });
+    mockedRunStandardSequence.mockImplementation(async () => { order.push('sequence'); });
+
+    await runLocalFlow(BASE_ANSWERS);
+
+    const iLocal = order.indexOf('localGen');
+    const iEvents = order.indexOf('genEvents');
+    const iClone = order.indexOf('clone');
+    const iSeq = order.indexOf('sequence');
+
+    expect(iLocal).toBeLessThan(iEvents);
+    expect(iEvents).toBeLessThan(iClone);
+    expect(iClone).toBeLessThan(iSeq);
+  });
+
+  it('logs a warning and continues to docs-generator when runGenerateEvents rejects', async () => {
+    mockedRunGenerateEvents.mockRejectedValueOnce(new Error('test:generate crash'));
+    await runLocalFlow(BASE_ANSWERS);
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Endpoint event generator failed'),
+    );
+    expect(mockedEnsureRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockedRunStandardSequence).toHaveBeenCalledTimes(1);
   });
 });

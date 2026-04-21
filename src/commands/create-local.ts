@@ -17,7 +17,7 @@ import {
   installDependencies,
   runStandardSequence,
 } from '../runners/docs-generator';
-import { runKibanaLocalGenerator } from '../runners/scripts';
+import { runKibanaLocalGenerator, runGenerateEvents } from '../runners/scripts';
 import { VOLUME_PRESETS } from '../config/volume-presets';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
@@ -26,7 +26,7 @@ import { getErrorMessage } from '../utils/errors';
 // Constants
 // ---------------------------------------------------------------------------
 
-const TOTAL_STEPS = 10;
+const TOTAL_STEPS = 11;
 const SAMPLE_DATASETS: ReadonlyArray<'flights' | 'ecommerce' | 'logs'> = [
   'flights',
   'ecommerce',
@@ -219,8 +219,20 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     );
   }
 
-  // ── Step 9/10: docs-generator ─────────────────────────────────────────────
-  logger.step(9, TOTAL_STEPS, 'Setting up security-documents-generator…');
+  // ── Step 9/11: Endpoint event generator (resolver trees) ─────────────────
+  // Note: yarn test:generate does NOT support --spaceId; always writes to
+  // the default space regardless of the configured space.
+  logger.step(9, TOTAL_STEPS, 'Running Kibana endpoint event generator (resolver trees)…');
+  try {
+    await runGenerateEvents(answers.kibanaDir, answers.kibanaUrl, credentials);
+  } catch (err) {
+    logger.warn(
+      `Endpoint event generator failed (continuing): ${getErrorMessage(err)}`,
+    );
+  }
+
+  // ── Step 10/11: docs-generator ────────────────────────────────────────────
+  logger.step(10, TOTAL_STEPS, 'Setting up security-documents-generator…');
   await ensureRepoCloned(answers.docsGeneratorDir);
   await writeConfig(answers.docsGeneratorDir, {
     elasticsearchUrl: answers.elasticsearchUrl,
@@ -234,7 +246,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     volume: answers.volume,
   });
 
-  // ── Step 10/10: Summary ───────────────────────────────────────────────────
-  logger.step(10, TOTAL_STEPS, 'Done!');
+  // ── Step 11/11: Summary ───────────────────────────────────────────────────
+  logger.step(11, TOTAL_STEPS, 'Done!');
   printLocalSummary(answers, autoStart.method, installResult.summary.succeeded);
 }
