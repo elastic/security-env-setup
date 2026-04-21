@@ -1,12 +1,13 @@
 import chalk from 'chalk';
 import { Command } from 'commander';
-import type { Environment } from '../types';
+import type { CleanAnswers, Environment } from '../types';
 import { hasApiKey } from '../config/store';
 import { createDeployment, waitForDeployment } from '../api/cloud';
 import { createSpaces, initializeSecurityApp } from '../api/kibana';
 import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '../runners/scripts';
 import { runWizard } from '../wizard/prompts';
 import { runLocalFlow } from './create-local';
+import { runCleanCore } from './clean';
 import logger from '../utils/logger';
 import { getErrorMessage } from '../utils/errors';
 
@@ -77,8 +78,16 @@ function registerSigintHandler(): void {
 // Command action
 // ---------------------------------------------------------------------------
 
-async function runCreate(): Promise<void> {
+async function runCreate(options: {
+  clean?: boolean;
+  dryRun?: boolean;
+  yes?: boolean;
+}): Promise<void> {
   registerSigintHandler();
+
+  if (options.dryRun && !options.clean) {
+    logger.warn('--dry-run is only meaningful with --clean; ignoring it for provisioning.');
+  }
 
   // ── Step 1/5: Interactive wizard ──────────────────────────────────────────
   logger.step(1, TOTAL_STEPS, 'Running deployment wizard…');
@@ -86,6 +95,23 @@ async function runCreate(): Promise<void> {
   const result = await runWizard();
 
   if (result.target !== 'elastic-cloud') {
+    if (options.clean && result.target === 'local-stateful') {
+      const cleanAnswers: CleanAnswers = {
+        target: 'local-stateful',
+        kibanaUrl: result.kibanaUrl,
+        elasticsearchUrl: result.elasticsearchUrl,
+        username: result.username,
+        password: result.password,
+        space: result.space,
+      };
+      await runCleanCore(cleanAnswers, { dryRun: options.dryRun, yes: options.yes });
+      if (options.dryRun) {
+        logger.info('Dry run complete — create was not executed.');
+        return;
+      }
+    } else if (options.clean) {
+      logger.warn('--clean is not supported for local-serverless; skipping clean.');
+    }
     await runLocalFlow(result);
     return;
   }
@@ -187,8 +213,11 @@ async function runCreate(): Promise<void> {
 
 export const createCommand = new Command('create')
   .description('Start the interactive deployment creation wizard')
-  .action((): void => {
-    runCreate().catch((err: unknown) => {
+  .option('--clean', 'Clean up previously provisioned resources before creating')
+  .option('--dry-run', 'Preview what clean would delete (requires --clean)')
+  .option('--yes', 'Skip interactive confirmation for clean operations')
+  .action((options: { clean?: boolean; dryRun?: boolean; yes?: boolean }): void => {
+    runCreate(options).catch((err: unknown) => {
       logger.error(`Deployment failed: ${getErrorMessage(err)}`);
       process.exitCode = 1;
     });

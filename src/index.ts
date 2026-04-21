@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { authCommand } from './commands/auth';
+import { cleanCommand } from './commands/clean';
 import { createCommand } from './commands/create';
 
 const program = new Command();
@@ -12,6 +13,7 @@ program
   .version('0.1.0');
 
 program.addCommand(authCommand);
+program.addCommand(cleanCommand);
 program.addCommand(createCommand);
 
 program.parse(process.argv);

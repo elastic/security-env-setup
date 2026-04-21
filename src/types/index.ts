@@ -146,3 +146,26 @@ export interface LocalWizardAnswers {
 export type WizardResult =
   | { target: 'elastic-cloud'; config: DeploymentConfig; environment: Environment }
   | LocalWizardAnswers;
+
+export interface CleanAnswers {
+  target: 'elastic-cloud' | 'local-stateful';
+  kibanaUrl: string;
+  elasticsearchUrl: string;
+  username: string;
+  password: string;
+  space: string;
+}
+
+export interface CleanOptions {
+  dryRun?: boolean;
+  yes?: boolean;
+}
+
+export interface CleanResult {
+  rulesDeleted: number;
+  rulesSkipped: number;
+  casesDeleted: number;
+  casesSkipped: number;
+  spacesDeleted: number;
+  spacesSkipped: number;
+}

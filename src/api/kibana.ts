@@ -457,3 +457,207 @@ export async function initializeSecurityApp(
     handleKibanaError(err, 'initializeSecurityApp', kibanaUrl);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Internal response shapes for clean operations
+// ---------------------------------------------------------------------------
+
+interface FindCasesPage {
+  total: number;
+  cases: Array<{ id: string; title: string }>;
+  page: number;
+  perPage: number;
+}
+
+interface FindCustomRulesPage {
+  total: number;
+  data: Array<{ id: string; name: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Clean operations
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all cases that carry the given tag, paginating as needed.
+ * Pagination: 100 items per page. Terminates when the collected count reaches
+ * `total` or the current page returns zero items (defensive).
+ */
+export async function findCasesByTag(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  tag: string,
+  spaceId?: string,
+): Promise<Array<{ id: string; title: string }>> {
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+  const tagEncoded = encodeURIComponent(tag);
+  const PAGE_SIZE = 100;
+
+  const items: Array<{ id: string; title: string }> = [];
+  let page = 1;
+
+  for (;;) {
+    const url =
+      `${kibanaUrl}${prefix}/api/cases/_find` +
+      `?tags=${tagEncoded}&perPage=${PAGE_SIZE}&page=${page}`;
+
+    const response = await axios
+      .get<FindCasesPage>(url, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) => handleKibanaError(err, 'findCasesByTag', kibanaUrl));
+
+    items.push(...response.data.cases);
+
+    if (items.length >= response.data.total || response.data.cases.length === 0) break;
+    page += 1;
+  }
+
+  return items;
+}
+
+/**
+ * Deletes cases in chunks of 100 using `DELETE /api/cases?ids=<json-array>`.
+ *
+ * - Empty input returns immediately without any HTTP call.
+ * - HTTP 4xx on a chunk: logs a warning and counts the chunk as skipped;
+ *   does NOT throw. Remaining chunks continue.
+ * - Network errors / 5xx propagate via `handleKibanaError`.
+ */
+export async function bulkDeleteCases(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  ids: string[],
+  spaceId?: string,
+): Promise<{ deleted: number; skipped: number }> {
+  if (ids.length === 0) return { deleted: 0, skipped: 0 };
+
+  const headers = buildKibanaHeaders(credentials);
+  const prefix = buildSpacePrefix(spaceId);
+  const CHUNK_SIZE = 100;
+  let deleted = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+    const idsEncoded = encodeURIComponent(JSON.stringify(chunk));
+    const url = `${kibanaUrl}${prefix}/api/cases?ids=${idsEncoded}`;
+
+    try {
+      await axios.delete<unknown>(url, { headers, timeout: REQUEST_TIMEOUT_MS });
+      deleted += chunk.length;
+    } catch (err) {
+      if (
+        axios.isAxiosError(err) &&
+        err.response?.status !== undefined &&
+        err.response.status >= 400 &&
+        err.response.status < 500
+      ) {
+        logger.warn(
+          `bulkDeleteCases: chunk delete returned HTTP ${String(err.response.status)}: ${err.message}`,
+        );
+        skipped += chunk.length;
+      } else {
+        handleKibanaError(err, 'bulkDeleteCases', kibanaUrl);
+      }
+    }
+  }
+
+  return { deleted, skipped };
+}
+
+/**
+ * Returns all custom (non-prebuilt, `immutable: false`) detection rules for
+ * the given space, paginating as needed (1 000 per page).
+ */
+export async function findCustomRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  spaceId?: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+  const PAGE_SIZE = 1000;
+  const filterEncoded = encodeURIComponent('alert.attributes.params.immutable: false');
+
+  const items: Array<{ id: string; name: string }> = [];
+  let page = 1;
+
+  for (;;) {
+    const url =
+      `${kibanaUrl}${prefix}/api/detection_engine/rules/_find` +
+      `?per_page=${PAGE_SIZE}&page=${page}&filter=${filterEncoded}`;
+
+    const response = await axios
+      .get<FindCustomRulesPage>(url, { headers, timeout: REQUEST_TIMEOUT_MS })
+      .catch((err: unknown) => handleKibanaError(err, 'findCustomRules', kibanaUrl));
+
+    items.push(...response.data.data);
+
+    if (items.length >= response.data.total || response.data.data.length === 0) break;
+    page += 1;
+  }
+
+  return items;
+}
+
+/**
+ * Bulk-deletes detection rules in chunks of 1 000 using
+ * `POST /api/detection_engine/rules/_bulk_action` with `action: "delete"`.
+ *
+ * - Empty input returns immediately without any HTTP call.
+ * - HTTP 4xx on a chunk: logs a warning and counts the chunk as skipped;
+ *   does NOT throw. Remaining chunks continue.
+ * - Network errors / 5xx propagate via `handleKibanaError`.
+ */
+export async function bulkDeleteRules(
+  kibanaUrl: string,
+  credentials: ElasticCredentials,
+  ids: string[],
+  spaceId?: string,
+): Promise<{ deleted: number; skipped: number }> {
+  if (ids.length === 0) return { deleted: 0, skipped: 0 };
+
+  const headers = {
+    ...buildKibanaHeaders(credentials),
+    'x-elastic-internal-origin': 'Kibana',
+    'elastic-api-version': '2023-10-31',
+  };
+  const prefix = buildSpacePrefix(spaceId);
+  const CHUNK_SIZE = 1000;
+  const bulkUrl = `${kibanaUrl}${prefix}/api/detection_engine/rules/_bulk_action`;
+  let deleted = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE);
+
+    try {
+      const response = await axios.post<{ rules_count: number }>(
+        bulkUrl,
+        { action: 'delete', ids: chunk },
+        { headers, timeout: REQUEST_TIMEOUT_MS },
+      );
+      deleted += response.data.rules_count;
+    } catch (err) {
+      if (
+        axios.isAxiosError(err) &&
+        err.response?.status !== undefined &&
+        err.response.status >= 400 &&
+        err.response.status < 500
+      ) {
+        logger.warn(
+          `bulkDeleteRules: chunk delete returned HTTP ${String(err.response.status)}: ${err.message}`,
+        );
+        skipped += chunk.length;
+      } else {
+        handleKibanaError(err, 'bulkDeleteRules', kibanaUrl);
+      }
+    }
+  }
+
+  return { deleted, skipped };
+}

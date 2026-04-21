@@ -13,6 +13,10 @@ import {
   installPrebuiltRules,
   bulkEnableImmutableRules,
   installSampleData,
+  findCustomRules,
+  bulkDeleteRules,
+  findCasesByTag,
+  bulkDeleteCases,
 } from '@api/kibana';
 import type {
   BulkEnableImmutableRulesResult,
@@ -667,5 +671,242 @@ describe('installSampleData', () => {
     await expect(
       installSampleData(KIBANA_URL, CREDS, 'flights'),
     ).rejects.toThrow('Kibana API request failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findCustomRules
+// ---------------------------------------------------------------------------
+
+describe('findCustomRules', () => {
+  const FILTER_ENCODED = encodeURIComponent('alert.attributes.params.immutable: false');
+
+  it('returns all items from a single page when total <= page size', async () => {
+    const rules = Array.from({ length: 5 }, (_, i) => ({ id: `rule-${i}`, name: `Rule ${i}` }));
+    mockedAxios.get.mockResolvedValueOnce({ data: { total: 5, data: rules } });
+
+    const result = await findCustomRules(KIBANA_URL, CREDS);
+
+    expect(result).toHaveLength(5);
+    expect(result[0]).toEqual({ id: 'rule-0', name: 'Rule 0' });
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('paginates when total exceeds page size', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `rule-${i}`, name: `Rule ${i}` }));
+    const page2 = Array.from({ length: 500 }, (_, i) => ({ id: `rule-${1000 + i}`, name: `Rule ${1000 + i}` }));
+
+    mockedAxios.get
+      .mockResolvedValueOnce({ data: { total: 1500, data: page1 } })
+      .mockResolvedValueOnce({ data: { total: 1500, data: page2 } });
+
+    const result = await findCustomRules(KIBANA_URL, CREDS);
+
+    expect(result).toHaveLength(1500);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+    const [url1] = mockedAxios.get.mock.calls[0] as [string];
+    const [url2] = mockedAxios.get.mock.calls[1] as [string];
+    expect(url1).toContain('page=1');
+    expect(url2).toContain('page=2');
+  });
+
+  it('includes the URL-encoded immutable filter in the request URL', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: { total: 0, data: [] } });
+    await findCustomRules(KIBANA_URL, CREDS);
+    const [url] = mockedAxios.get.mock.calls[0] as [string];
+    expect(url).toContain(`filter=${FILTER_ENCODED}`);
+  });
+
+  it('throws via handleKibanaError on 4xx', async () => {
+    const err = { isAxiosError: true, response: { status: 403 }, message: 'Forbidden' };
+    mockedAxios.get.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(findCustomRules(KIBANA_URL, CREDS)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bulkDeleteRules
+// ---------------------------------------------------------------------------
+
+describe('bulkDeleteRules', () => {
+  let consoleWarnSpy: jest.SpyInstance;
+  beforeEach(() => {
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => { consoleWarnSpy.mockRestore(); });
+
+  it('returns zero counts and makes NO axios call when ids is empty', async () => {
+    const result = await bulkDeleteRules(KIBANA_URL, CREDS, []);
+    expect(result).toEqual({ deleted: 0, skipped: 0 });
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('issues one POST for 500 ids and returns deleted count from rules_count', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: { rules_count: 500 } });
+    const ids = Array.from({ length: 500 }, (_, i) => `id-${i}`);
+    const result = await bulkDeleteRules(KIBANA_URL, CREDS, ids);
+    expect(result).toEqual({ deleted: 500, skipped: 0 });
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('chunks 2500 ids into 3 POST calls (1000, 1000, 500)', async () => {
+    mockedAxios.post
+      .mockResolvedValueOnce({ data: { rules_count: 1000 } })
+      .mockResolvedValueOnce({ data: { rules_count: 1000 } })
+      .mockResolvedValueOnce({ data: { rules_count: 500 } });
+    const ids = Array.from({ length: 2500 }, (_, i) => `id-${i}`);
+    const result = await bulkDeleteRules(KIBANA_URL, CREDS, ids);
+    expect(result).toEqual({ deleted: 2500, skipped: 0 });
+    expect(mockedAxios.post).toHaveBeenCalledTimes(3);
+    const chunk1 = (mockedAxios.post.mock.calls[0][1] as { ids: string[] }).ids;
+    const chunk2 = (mockedAxios.post.mock.calls[1][1] as { ids: string[] }).ids;
+    const chunk3 = (mockedAxios.post.mock.calls[2][1] as { ids: string[] }).ids;
+    expect(chunk1).toHaveLength(1000);
+    expect(chunk2).toHaveLength(1000);
+    expect(chunk3).toHaveLength(500);
+  });
+
+  it('logs warn and counts chunk as skipped when first chunk returns 4xx; continues remaining chunks', async () => {
+    const err = { isAxiosError: true, response: { status: 422 }, message: 'Unprocessable' };
+    mockedAxios.post
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({ data: { rules_count: 500 } });
+    mockedAxios.isAxiosError.mockReturnValue(true);
+
+    const ids = Array.from({ length: 1500 }, (_, i) => `id-${i}`);
+    const result = await bulkDeleteRules(KIBANA_URL, CREDS, ids);
+
+    expect(result.skipped).toBe(1000); // first chunk
+    expect(result.deleted).toBe(500);  // second chunk
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('422'));
+    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates network errors via handleKibanaError', async () => {
+    const err = new Error('Network Error');
+    mockedAxios.post.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(false);
+    await expect(bulkDeleteRules(KIBANA_URL, CREDS, ['id-1'])).rejects.toThrow('Network Error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findCasesByTag
+// ---------------------------------------------------------------------------
+
+describe('findCasesByTag', () => {
+  it('returns all cases from a single page', async () => {
+    const cases = Array.from({ length: 10 }, (_, i) => ({ id: `case-${i}`, title: `Case ${i}` }));
+    mockedAxios.get.mockResolvedValueOnce({
+      data: { total: 10, cases, page: 1, perPage: 100 },
+    });
+
+    const result = await findCasesByTag(KIBANA_URL, CREDS, 'data-generator');
+
+    expect(result).toHaveLength(10);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('paginates across two pages when total is 150', async () => {
+    mockedAxios.get.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://x').searchParams;
+      const page = Number(params.get('page'));
+      if (page === 1) {
+        return {
+          data: {
+            total: 150,
+            cases: Array.from({ length: 100 }, (_, i) => ({ id: `case-${i}`, title: `Case ${i}` })),
+            page: 1,
+            perPage: 100,
+          },
+        };
+      }
+      return {
+        data: {
+          total: 150,
+          cases: Array.from({ length: 50 }, (_, i) => ({ id: `case-${100 + i}`, title: `Case ${100 + i}` })),
+          page: 2,
+          perPage: 100,
+        },
+      };
+    });
+
+    const result = await findCasesByTag(KIBANA_URL, CREDS, 'data-generator');
+    expect(result).toHaveLength(150);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('URL-encodes the tag (tag with space is percent-encoded)', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: { total: 0, cases: [], page: 1, perPage: 100 },
+    });
+    await findCasesByTag(KIBANA_URL, CREDS, 'data generator');
+    const [url] = mockedAxios.get.mock.calls[0] as [string];
+    expect(url).toMatch(/data(%20|\+)generator/);
+  });
+
+  it('throws via handleKibanaError on 4xx', async () => {
+    const err = { isAxiosError: true, response: { status: 404 }, message: 'Not Found' };
+    mockedAxios.get.mockRejectedValueOnce(err);
+    mockedAxios.isAxiosError.mockReturnValue(true);
+    await expect(findCasesByTag(KIBANA_URL, CREDS, 'data-generator')).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bulkDeleteCases
+// ---------------------------------------------------------------------------
+
+describe('bulkDeleteCases', () => {
+  let consoleWarnSpy: jest.SpyInstance;
+  beforeEach(() => {
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => { consoleWarnSpy.mockRestore(); });
+
+  it('returns zero counts and makes NO axios call when ids is empty', async () => {
+    const result = await bulkDeleteCases(KIBANA_URL, CREDS, []);
+    expect(result).toEqual({ deleted: 0, skipped: 0 });
+    expect(mockedAxios.delete).not.toHaveBeenCalled();
+  });
+
+  it('issues one DELETE for 50 ids and returns deleted: 50 on HTTP 204', async () => {
+    mockedAxios.delete.mockResolvedValueOnce({ status: 204, data: undefined });
+    const ids = Array.from({ length: 50 }, (_, i) => `case-${i}`);
+    const result = await bulkDeleteCases(KIBANA_URL, CREDS, ids);
+    expect(result).toEqual({ deleted: 50, skipped: 0 });
+    expect(mockedAxios.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('chunks 250 ids into 3 DELETE calls (100, 100, 50)', async () => {
+    mockedAxios.delete.mockResolvedValue({ status: 204, data: undefined });
+    const ids = Array.from({ length: 250 }, (_, i) => `case-${i}`);
+    await bulkDeleteCases(KIBANA_URL, CREDS, ids);
+    expect(mockedAxios.delete).toHaveBeenCalledTimes(3);
+  });
+
+  it('URL-encodes ids param as JSON array in the DELETE URL', async () => {
+    mockedAxios.delete.mockResolvedValueOnce({ status: 204, data: undefined });
+    await bulkDeleteCases(KIBANA_URL, CREDS, ['id-1', 'id-2']);
+    const [url] = mockedAxios.delete.mock.calls[0] as [string];
+    // JSON array opening bracket URL-encoded is %5B
+    expect(url).toContain('ids=%5B');
+  });
+
+  it('logs warn and counts chunk as skipped when first chunk returns 404; continues remaining chunks', async () => {
+    const err = { isAxiosError: true, response: { status: 404 }, message: 'Not Found' };
+    mockedAxios.delete
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({ status: 204, data: undefined });
+    mockedAxios.isAxiosError.mockReturnValue(true);
+
+    const ids = Array.from({ length: 150 }, (_, i) => `case-${i}`);
+    const result = await bulkDeleteCases(KIBANA_URL, CREDS, ids);
+
+    expect(result.skipped).toBe(100); // first chunk
+    expect(result.deleted).toBe(50);  // second chunk
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('404'));
+    expect(mockedAxios.delete).toHaveBeenCalledTimes(2);
   });
 });

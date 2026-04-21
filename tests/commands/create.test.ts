@@ -5,6 +5,7 @@ jest.mock('@api/kibana');
 jest.mock('@runners/scripts');
 jest.mock('@config/store');
 jest.mock('@commands/create-local');
+jest.mock('@commands/clean');
 
 import ora from 'ora';
 import { runWizard } from '@wizard/prompts';
@@ -13,8 +14,9 @@ import { createSpaces, initializeSecurityApp } from '@api/kibana';
 import { runAllDataGeneration, runGenerateAttacks, runGenerateCases } from '@runners/scripts';
 import { hasApiKey } from '@config/store';
 import { runLocalFlow } from '@commands/create-local';
+import { runCleanCore } from '@commands/clean';
 import { createCommand } from '@commands/create';
-import type { LocalWizardAnswers } from '@types-local/index';
+import type { LocalWizardAnswers, CleanResult } from '@types-local/index';
 
 const mockSpinner = {
   start: jest.fn().mockReturnThis(),
@@ -36,6 +38,7 @@ const mockedRunGenerateAttacks = runGenerateAttacks as jest.MockedFunction<typeo
 const mockedRunGenerateCases = runGenerateCases as jest.MockedFunction<typeof runGenerateCases>;
 const mockedHasApiKey = hasApiKey as jest.MockedFunction<typeof hasApiKey>;
 const mockedRunLocalFlow = runLocalFlow as jest.MockedFunction<typeof runLocalFlow>;
+const mockedRunCleanCore = runCleanCore as jest.MockedFunction<typeof runCleanCore>;
 
 const WIZARD_RESULT = {
   config: {
@@ -104,6 +107,14 @@ beforeEach(() => {
 
   mockedHasApiKey.mockReturnValue(true);
   mockedRunLocalFlow.mockResolvedValue(undefined);
+  mockedRunCleanCore.mockResolvedValue({
+    rulesDeleted: 0,
+    rulesSkipped: 0,
+    casesDeleted: 0,
+    casesSkipped: 0,
+    spacesDeleted: 0,
+    spacesSkipped: 0,
+  } satisfies CleanResult);
   mockedRunWizard.mockResolvedValue(WIZARD_RESULT);
   mockedCreateDeployment.mockResolvedValue(INITIAL_RESULT);
   mockedWaitForDeployment.mockResolvedValue(RUNNING_RESULT);
@@ -360,5 +371,76 @@ describe('create command', () => {
     await invokeCreate();
     const output = consoleSpy.mock.calls.flat().join('\n');
     expect(output).not.toContain('Data spaces');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helper that accepts explicit CLI args (for flag testing)
+// ---------------------------------------------------------------------------
+
+async function invokeCreateWithArgs(args: string[]): Promise<void> {
+  await createCommand.parseAsync(args, { from: 'user' });
+  await new Promise((r) => setTimeout(r, 10));
+}
+
+describe('with --clean flag', () => {
+  const CLEAN_ANSWERS = {
+    target: 'local-stateful' as const,
+    kibanaUrl: LOCAL_ANSWERS.kibanaUrl,
+    elasticsearchUrl: LOCAL_ANSWERS.elasticsearchUrl,
+    username: LOCAL_ANSWERS.username,
+    password: LOCAL_ANSWERS.password,
+    space: LOCAL_ANSWERS.space,
+  };
+
+  beforeEach(() => {
+    // Commander persists option values between parseAsync calls on the same instance.
+    // Reset all flags before each test so they start from a clean slate.
+    createCommand.setOptionValue('clean', undefined);
+    createCommand.setOptionValue('dryRun', undefined);
+    createCommand.setOptionValue('yes', undefined);
+
+    // Wizard always returns a local-stateful result for these tests
+    mockedRunWizard.mockResolvedValue(LOCAL_ANSWERS);
+  });
+
+  it('calls runCleanCore then runLocalFlow when --clean is passed without --dry-run', async () => {
+    await invokeCreateWithArgs(['--clean']);
+
+    expect(mockedRunCleanCore).toHaveBeenCalledTimes(1);
+    expect(mockedRunCleanCore).toHaveBeenCalledWith(CLEAN_ANSWERS, {
+      dryRun: undefined,
+      yes: undefined,
+    });
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
+  });
+
+  it('calls runCleanCore but NOT runLocalFlow when --clean --dry-run is passed', async () => {
+    await invokeCreateWithArgs(['--clean', '--dry-run']);
+
+    expect(mockedRunCleanCore).toHaveBeenCalledTimes(1);
+    expect(mockedRunCleanCore).toHaveBeenCalledWith(CLEAN_ANSWERS, {
+      dryRun: true,
+      yes: undefined,
+    });
+    expect(mockedRunLocalFlow).not.toHaveBeenCalled();
+  });
+
+  it('does not call runCleanCore when --clean is not passed', async () => {
+    await invokeCreateWithArgs([]);
+
+    expect(mockedRunCleanCore).not.toHaveBeenCalled();
+    expect(mockedRunLocalFlow).toHaveBeenCalledWith(LOCAL_ANSWERS);
+  });
+
+  it('sets exitCode and skips runLocalFlow when runCleanCore rejects', async () => {
+    mockedRunCleanCore.mockRejectedValueOnce(new Error('scan failed'));
+
+    await invokeCreateWithArgs(['--clean']);
+
+    expect(mockedRunLocalFlow).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const errOutput = consoleErrorSpy.mock.calls.flat().join('');
+    expect(errOutput).toContain('scan failed');
   });
 });

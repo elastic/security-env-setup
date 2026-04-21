@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import * as inquirer from 'inquirer';
 import type {
+  CleanAnswers,
   Environment,
   KibanaSpace,
   LocalWizardAnswers,
@@ -385,4 +386,112 @@ export async function runWizard(): Promise<WizardResult> {
     },
     environment,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Clean wizard
+// ---------------------------------------------------------------------------
+
+/**
+ * Collects the minimum set of answers needed by `runCleanCore`: target type,
+ * Kibana/ES URLs, credentials, and space.
+ *
+ * Supports `elastic-cloud` and `local-stateful` targets only — serverless is
+ * out of scope for the clean operation.
+ */
+export async function runCleanPrompts(): Promise<CleanAnswers> {
+  const { target } = await inquirer.prompt<{
+    target: 'elastic-cloud' | 'local-stateful';
+  }>([
+    {
+      type: 'list',
+      name: 'target',
+      message: 'What kind of environment do you want to clean?',
+      choices: [
+        { name: 'Elastic Cloud (ECH)', value: 'elastic-cloud' },
+        { name: 'Local stateful (self-hosted)', value: 'local-stateful' },
+      ],
+    },
+  ]);
+
+  const defaultKibanaUrl =
+    target === 'local-stateful' ? 'http://localhost:5601' : '';
+  const defaultEsUrl =
+    target === 'local-stateful' ? 'http://localhost:9200' : '';
+
+  const answers = await inquirer.prompt<{
+    kibanaUrl: string;
+    elasticsearchUrl: string;
+    username: string;
+    password: string;
+    space: string;
+  }>([
+    {
+      type: 'input',
+      name: 'kibanaUrl',
+      message: 'Kibana URL:',
+      default: defaultKibanaUrl || undefined,
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (t.length === 0) return 'Kibana URL is required.';
+        if (!t.startsWith('http://') && !t.startsWith('https://'))
+          return 'URL must start with http:// or https://.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'input',
+      name: 'elasticsearchUrl',
+      message: 'Elasticsearch URL:',
+      default: defaultEsUrl || undefined,
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (t.length === 0) return 'Elasticsearch URL is required.';
+        if (!t.startsWith('http://') && !t.startsWith('https://'))
+          return 'URL must start with http:// or https://.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'input',
+      name: 'username',
+      message: 'Username:',
+      default: 'elastic',
+      validate: (input: string): boolean | string => {
+        if (input.trim().length === 0) return 'Username is required.';
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+    {
+      type: 'password',
+      name: 'password',
+      message: 'Password:',
+      mask: '*',
+      validate: (input: string): boolean | string => {
+        if (input.trim().length === 0) return 'Password is required.';
+        return true;
+      },
+    },
+    {
+      type: 'input',
+      name: 'space',
+      message: 'Kibana space ID:',
+      default: 'default',
+      validate: (input: string): boolean | string => {
+        const t = input.trim();
+        if (!SPACE_ID_RE.test(t))
+          return (
+            'Space ID must start with a lowercase letter or digit, and contain ' +
+            'only lowercase alphanumeric characters, underscores, or hyphens.'
+          );
+        return true;
+      },
+      filter: (input: string): string => input.trim(),
+    },
+  ]);
+
+  return { target, ...answers };
 }
