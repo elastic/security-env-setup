@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 
 // Do NOT jest.mock('fs') — the auto-mocker leaves fs.promises as undefined.
 // Instead spy on fs.promises.readdir directly so the real object is available.
@@ -14,15 +15,18 @@ const ORIG_NVM_DIR = process.env.NVM_DIR;
 const ORIG_HOME = process.env.HOME;
 
 let readdirSpy: jest.SpyInstance;
+let homedirSpy: jest.SpyInstance;
 
 beforeEach(() => {
   readdirSpy = jest.spyOn(fs.promises, 'readdir');
+  homedirSpy = jest.spyOn(os, 'homedir').mockReturnValue('/home/os-user');
   process.env.NVM_DIR = '/test-nvm';
   process.env.HOME = '/home/testuser';
 });
 
 afterEach(() => {
   readdirSpy.mockRestore();
+  homedirSpy.mockRestore();
   if (ORIG_NVM_DIR === undefined) {
     delete process.env.NVM_DIR;
   } else {
@@ -123,7 +127,7 @@ describe('listNvmNodeVersions', () => {
     );
   });
 
-  it('falls back to ~/.nvm when both NVM_DIR and HOME are not set', async () => {
+  it('falls back to os.homedir()/.nvm when both NVM_DIR and HOME are not set', async () => {
     delete process.env.NVM_DIR;
     delete process.env.HOME;
     readdirSpy.mockRejectedValue(new Error('ENOENT'));
@@ -131,7 +135,9 @@ describe('listNvmNodeVersions', () => {
     const result = await listNvmNodeVersions();
 
     expect(result).toEqual([]);
-    expect(readdirSpy).toHaveBeenCalledWith(expect.stringContaining('~'));
+    expect(readdirSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/home/os-user/.nvm'),
+    );
   });
 
   it('sorts correctly when minor and patch versions differ within same major', async () => {

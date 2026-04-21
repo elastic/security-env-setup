@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 // ---------------------------------------------------------------------------
@@ -18,8 +19,8 @@ export interface NvmNodeVersion {
 
 /** Resolves the nvm versions/node directory from the environment. */
 function nvmVersionsDir(): string {
-  const nvmDir =
-    process.env.NVM_DIR ?? path.join(process.env.HOME ?? '~', '.nvm');
+  const homeDir = process.env.HOME || os.homedir();
+  const nvmDir = process.env.NVM_DIR ?? path.join(homeDir, '.nvm');
   return path.join(nvmDir, 'versions', 'node');
 }
 

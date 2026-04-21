@@ -444,3 +444,22 @@ describe('with --clean flag', () => {
     expect(errOutput).toContain('scan failed');
   });
 });
+
+describe('elastic-cloud target with clean flags', () => {
+  beforeEach(() => {
+    createCommand.setOptionValue('clean', undefined);
+    createCommand.setOptionValue('dryRun', undefined);
+    createCommand.setOptionValue('yes', undefined);
+    mockedRunWizard.mockResolvedValue(WIZARD_RESULT);
+  });
+
+  it('warns and ignores clean flags for elastic-cloud', async () => {
+    await invokeCreateWithArgs(['--clean', '--dry-run', '--yes']);
+
+    expect(mockedRunCleanCore).not.toHaveBeenCalled();
+    expect(mockedCreateDeployment).toHaveBeenCalledTimes(1);
+    const warnOutput = consoleWarnSpy.mock.calls.flat().join('\n');
+    expect(warnOutput).toContain('--clean, --dry-run, --yes');
+    expect(warnOutput).toContain('only supported with local-stateful target');
+  });
+});

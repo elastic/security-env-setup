@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import * as inquirer from 'inquirer';
 
@@ -67,6 +68,7 @@ let consoleWarnSpy: jest.SpyInstance;
 let consoleErrorSpy: jest.SpyInstance;
 let stdoutSpy: jest.SpyInstance;
 let stderrSpy: jest.SpyInstance;
+let homedirSpy: jest.SpyInstance;
 
 // ---------------------------------------------------------------------------
 // Child process helpers (same pattern as scripts.test.ts)
@@ -124,6 +126,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  homedirSpy = jest.spyOn(os, 'homedir').mockReturnValue('/home/os-user');
   mockedFs.existsSync.mockReturnValue(false);
   mockedWriteFile.mockResolvedValue(undefined);
   // Set a predictable NVM_DIR so resolveNvmDir() checks a known path
@@ -131,6 +134,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  homedirSpy.mockRestore();
   if (ORIG_NVM_DIR === undefined) {
     delete process.env.NVM_DIR;
   } else {
@@ -730,7 +734,7 @@ describe('runCommand branch coverage', () => {
     expect(mockedSpawn.mock.calls[0]?.[0]).toBe('yarn');
   });
 
-  it('falls back to ~ when both NVM_DIR and HOME are not set', async () => {
+  it('falls back to os.homedir() when both NVM_DIR and HOME are not set', async () => {
     delete process.env.NVM_DIR;
     delete process.env.HOME;
     mockedFs.existsSync.mockReturnValue(false);
@@ -923,7 +927,7 @@ describe('ensureNode24Installed', () => {
     expect(script).toContain('/home/testuser2/.nvm/nvm.sh');
   });
 
-  it('falls back to ~/.nvm in install command when both NVM_DIR and HOME are unset', async () => {
+  it('falls back to os.homedir()/.nvm in install command when both NVM_DIR and HOME are unset', async () => {
     delete process.env.NVM_DIR;
     delete process.env.HOME;
     mockedListNvmNodeVersions
@@ -938,6 +942,6 @@ describe('ensureNode24Installed', () => {
     await ensureNode24Installed();
 
     const script = getBashScript(0);
-    expect(script).toContain('~/.nvm/nvm.sh');
+    expect(script).toContain('/home/os-user/.nvm/nvm.sh');
   });
 });

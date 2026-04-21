@@ -104,7 +104,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
   };
   const spaceArg = answers.space === 'default' ? undefined : answers.space;
 
-  // ── Step 1/10: Node 24 preflight ──────────────────────────────────────────
+  // ── Step 1/11: Node 24 preflight ──────────────────────────────────────────
   logger.step(1, TOTAL_STEPS, 'Checking Node 24 via nvm…');
   try {
     await ensureNode24Installed();
@@ -113,7 +113,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     return;
   }
 
-  // ── Step 2/10: Bootstrap check ────────────────────────────────────────────
+  // ── Step 2/11: Bootstrap check ────────────────────────────────────────────
   logger.step(2, TOTAL_STEPS, 'Checking Kibana bootstrap…');
   const markerPath = path.join(
     answers.kibanaDir,
@@ -128,7 +128,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     );
   }
 
-  // ── Step 3/10: Ensure services running ───────────────────────────────────
+  // ── Step 3/11: Ensure services running ───────────────────────────────────
   logger.step(3, TOTAL_STEPS, 'Ensuring Kibana and Elasticsearch are running…');
   const autoStart = await ensureServicesRunning(
     answers.target,
@@ -145,7 +145,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     logger.info('Services started (assisted).');
   }
 
-  // ── Step 4/10: Sample data ────────────────────────────────────────────────
+  // ── Step 4/11: Sample data ────────────────────────────────────────────────
   logger.step(4, TOTAL_STEPS, 'Installing Kibana sample data…');
   if (answers.installSampleData) {
     for (const dataset of SAMPLE_DATASETS) {
@@ -167,7 +167,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     logger.info('Sample data installation skipped.');
   }
 
-  // ── Step 5/10: Space creation ─────────────────────────────────────────────
+  // ── Step 5/11: Space creation ─────────────────────────────────────────────
   logger.step(5, TOTAL_STEPS, 'Creating Kibana space…');
   if (answers.space !== 'default') {
     const { alreadyExisted } = await createSpace(
@@ -184,11 +184,11 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     logger.info('Using default space — no space creation needed.');
   }
 
-  // ── Step 6/10: Detection Engine init ──────────────────────────────────────
+  // ── Step 6/11: Detection Engine init ──────────────────────────────────────
   logger.step(6, TOTAL_STEPS, 'Initializing Security Solution detection engine…');
   await initializeSecurityApp(answers.kibanaUrl, credentials);
 
-  // ── Step 7/10: Prebuilt rules ─────────────────────────────────────────────
+  // ── Step 7/11: Prebuilt rules ─────────────────────────────────────────────
   logger.step(7, TOTAL_STEPS, 'Installing prebuilt detection rules…');
   const installResult = await installPrebuiltRules(
     answers.kibanaUrl,
@@ -203,7 +203,7 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
     'Rules are installed but NOT enabled. Open Kibana → Security → Rules to enable the ones you need.',
   );
 
-  // ── Step 8/10: Kibana internal generator ──────────────────────────────────
+  // ── Step 8/11: Kibana internal generator ──────────────────────────────────
   logger.step(8, TOTAL_STEPS, 'Running Kibana internal data generator…');
   const preset = VOLUME_PRESETS[answers.volume];
   try {

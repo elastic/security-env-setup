@@ -117,6 +117,17 @@ async function runCreate(options: {
   }
 
   const { config, environment } = result;
+  const cleanFlagsUsed = [
+    options.clean ? '--clean' : undefined,
+    options.dryRun ? '--dry-run' : undefined,
+    options.yes ? '--yes' : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+
+  if (cleanFlagsUsed.length > 0) {
+    logger.warn(
+      `${cleanFlagsUsed.join(', ')} ${cleanFlagsUsed.length === 1 ? 'is' : 'are'} only supported with local-stateful target; ignoring for elastic-cloud provisioning.`,
+    );
+  }
 
   if (!hasApiKey(environment)) {
     logger.error(

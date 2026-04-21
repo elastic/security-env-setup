@@ -468,10 +468,11 @@ export async function ensureServicesRunning(
     '',
     'Auto-start unavailable. Please run these commands in two terminals:',
   ];
+  const quotedKibanaDir = `'${escapeSingleQuoted(kibanaDir)}'`;
 
   if (needEs) {
     lines.push('', 'Terminal 1 (Elasticsearch):');
-    lines.push(`  cd ${kibanaDir}`);
+    lines.push(`  cd ${quotedKibanaDir}`);
     lines.push(`  ${es.command}`);
   }
 
@@ -479,7 +480,7 @@ export async function ensureServicesRunning(
     const termNum = needEs ? 2 : 1;
     const suffix = needEs ? ' \u2014 start after ES is ready' : '';
     lines.push('', `Terminal ${termNum} (Kibana${suffix}):`);
-    lines.push(`  cd ${kibanaDir}`);
+    lines.push(`  cd ${quotedKibanaDir}`);
     lines.push(`  ${kibana.command}`);
   }
 

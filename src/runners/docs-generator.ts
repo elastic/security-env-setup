@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { writeFile } from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 import * as inquirer from 'inquirer';
@@ -48,8 +49,7 @@ function shellQuote(arg: string): string {
  * or `undefined` if nvm is not present on this machine.
  */
 function resolveNvmDir(): string | undefined {
-  const nvmDir =
-    process.env.NVM_DIR ?? path.join(process.env.HOME ?? '~', '.nvm');
+  const nvmDir = process.env.NVM_DIR ?? path.join(process.env.HOME || os.homedir(), '.nvm');
   return fs.existsSync(path.join(nvmDir, 'nvm.sh')) ? nvmDir : undefined;
 }
 
@@ -308,7 +308,7 @@ export async function runDocsGeneratorCommand(
 
       if (timedOut) {
         logger.warn(
-          `Comando excedió ${DOCS_GENERATOR_COMMAND_TIMEOUT_MS / 1_000}s y fue interrumpido (seguimos): yarn start ${description}`,
+          `Command exceeded ${DOCS_GENERATOR_COMMAND_TIMEOUT_MS / 1_000}s and was terminated (continuing): yarn start ${description}`,
         );
         resolve();
         return;
@@ -319,7 +319,7 @@ export async function runDocsGeneratorCommand(
       } else {
         const codeStr = code !== null ? String(code) : 'unknown';
         logger.warn(
-          `Comando falló (seguimos): yarn start ${description}: exit code ${codeStr}`,
+          `Command failed (continuing): yarn start ${description}: exit code ${codeStr}`,
         );
         resolve();
       }
@@ -328,7 +328,7 @@ export async function runDocsGeneratorCommand(
     child.on('error', (err: Error) => {
       clearTimeout(timeoutHandle);
       logger.warn(
-        `Comando falló (seguimos): yarn start ${description}: ${getErrorMessage(err)}`,
+        `Command failed (continuing): yarn start ${description}: ${getErrorMessage(err)}`,
       );
       resolve();
     });
@@ -419,8 +419,7 @@ export async function ensureNode24Installed(): Promise<NvmNodeVersion> {
     throw new Error(NODE24_REQUIRED_MSG);
   }
 
-  const nvmDir =
-    process.env.NVM_DIR ?? path.join(process.env.HOME ?? '~', '.nvm');
+  const nvmDir = process.env.NVM_DIR ?? path.join(process.env.HOME || os.homedir(), '.nvm');
   const installCmd = `source "${nvmDir}/nvm.sh" && nvm install 24`;
   await runCommand('bash', ['-c', installCmd], process.cwd(), {
     ...process.env,

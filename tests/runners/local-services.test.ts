@@ -857,4 +857,20 @@ describe('ensureServicesRunning', () => {
     expect(mockedInquirer.prompt).toHaveBeenCalledTimes(1);
     expect(mockSpinner.succeed).toHaveBeenCalledWith('Kibana is healthy.');
   });
+
+  it('quotes kibanaDir in assisted manual instructions', async () => {
+    mockedAxios.get
+      .mockRejectedValueOnce(new Error('ECONNREFUSED')) // Kibana down
+      .mockRejectedValueOnce(new Error('ECONNREFUSED')) // ES down
+      .mockResolvedValue({ status: 200 }); // healthy after prompt
+
+    mockSpawnClose(1); // osascript fails -> assisted mode
+
+    await ensureServicesRunning(
+      'local-stateful', '/path/with space/kibana', KIBANA_URL, ES_URL, CREDS,
+    );
+
+    const printedLines = consoleSpy.mock.calls.flat().join('\n');
+    expect(printedLines).toContain("cd '/path/with space/kibana'");
+  });
 });
