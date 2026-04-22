@@ -66,7 +66,10 @@ const LOCAL_ANSWERS: LocalWizardAnswers = {
   password: 'changeme',
   space: 'default',
   volume: 'medium',
-  docsGeneratorDir: '/home/user/security-documents-generator',
+  generateAlertsAndCases: false,
+  generateEvents: false,
+  generateExtended: false,
+  docsGeneratorDir: '',
   installSampleData: false,
 };
 

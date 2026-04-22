@@ -59,6 +59,9 @@ const BASE_ANSWERS: LocalWizardAnswers = {
   password: 'changeme',
   space: 'default',
   volume: 'medium',
+  generateAlertsAndCases: true,
+  generateEvents: true,
+  generateExtended: true,
   docsGeneratorDir: '/home/user/security-documents-generator',
   installSampleData: false,
 };
@@ -512,6 +515,64 @@ describe('runLocalFlow — runGenerateEvents (endpoint event generator)', () => 
       expect.stringContaining('Endpoint event generator failed'),
     );
     expect(mockedEnsureRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockedRunStandardSequence).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Data generation conditional execution (Stage 4.15)
+// ---------------------------------------------------------------------------
+
+describe('runLocalFlow — data generation conditional execution', () => {
+  const NO_GEN: LocalWizardAnswers = {
+    ...BASE_ANSWERS,
+    generateAlertsAndCases: false,
+    generateEvents: false,
+    generateExtended: false,
+  };
+
+  it('all flags true → all generator functions called', async () => {
+    await runLocalFlow(BASE_ANSWERS); // BASE_ANSWERS has all three flags true
+    expect(mockedRunKibanaLocalGenerator).toHaveBeenCalledTimes(1);
+    expect(mockedRunGenerateEvents).toHaveBeenCalledTimes(1);
+    expect(mockedEnsureRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockedRunStandardSequence).toHaveBeenCalledTimes(1);
+  });
+
+  it('all flags false → no generator functions called; flow still reaches summary', async () => {
+    await runLocalFlow(NO_GEN);
+    expect(mockedRunKibanaLocalGenerator).not.toHaveBeenCalled();
+    expect(mockedRunGenerateEvents).not.toHaveBeenCalled();
+    expect(mockedEnsureRepoCloned).not.toHaveBeenCalled();
+    expect(mockedRunStandardSequence).not.toHaveBeenCalled();
+    // Summary still printed
+    const output = consoleSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Local Environment Ready');
+  });
+
+  it('only generateAlertsAndCases true → only runKibanaLocalGenerator called', async () => {
+    await runLocalFlow({ ...NO_GEN, generateAlertsAndCases: true });
+    expect(mockedRunKibanaLocalGenerator).toHaveBeenCalledTimes(1);
+    expect(mockedRunGenerateEvents).not.toHaveBeenCalled();
+    expect(mockedEnsureRepoCloned).not.toHaveBeenCalled();
+    expect(mockedRunStandardSequence).not.toHaveBeenCalled();
+  });
+
+  it('only generateEvents true → only runGenerateEvents called', async () => {
+    await runLocalFlow({ ...NO_GEN, generateEvents: true });
+    expect(mockedRunKibanaLocalGenerator).not.toHaveBeenCalled();
+    expect(mockedRunGenerateEvents).toHaveBeenCalledTimes(1);
+    expect(mockedEnsureRepoCloned).not.toHaveBeenCalled();
+    expect(mockedRunStandardSequence).not.toHaveBeenCalled();
+  });
+
+  it('only generateExtended true → only docs-generator chain called', async () => {
+    await runLocalFlow({ ...NO_GEN, generateExtended: true });
+    expect(mockedRunKibanaLocalGenerator).not.toHaveBeenCalled();
+    expect(mockedRunGenerateEvents).not.toHaveBeenCalled();
+    expect(mockedEnsureRepoCloned).toHaveBeenCalledTimes(1);
+    expect(mockedWriteConfig).toHaveBeenCalledTimes(1);
+    expect(mockedInstallDependencies).toHaveBeenCalledTimes(1);
     expect(mockedRunStandardSequence).toHaveBeenCalledTimes(1);
   });
 });

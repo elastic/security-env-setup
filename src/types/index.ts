@@ -139,6 +139,13 @@ export interface LocalWizardAnswers {
   password: string;
   space: string;
   volume: Volume;
+  /** True when the user selected either "Alerts" or "Cases" in the data-gen checkbox. */
+  generateAlertsAndCases: boolean;
+  /** True when the user selected "Events" in the data-gen checkbox. */
+  generateEvents: boolean;
+  /** True when the user selected "Extended data" (docs-generator) in the data-gen checkbox. */
+  generateExtended: boolean;
+  /** Absolute path to the security-documents-generator checkout; empty string when generateExtended is false. */
   docsGeneratorDir: string;
   installSampleData: boolean;
 }

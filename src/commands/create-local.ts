@@ -50,6 +50,9 @@ function printLocalSummary(
     volume,
     docsGeneratorDir,
     installSampleData: sampleDataFlag,
+    generateAlertsAndCases,
+    generateEvents,
+    generateExtended,
   } = answers;
 
   const line = chalk.cyan('─'.repeat(60));
@@ -73,6 +76,15 @@ function printLocalSummary(
   logger.print(`  ${label('Sample data')}${value(sampleDataFlag ? 'installed' : 'skipped')}`);
   logger.print(
     `  ${label('Rules')}${value(`${String(rulesInstalled)} installed (enable from Rules UI)`)}`,
+  );
+  logger.print(
+    `  ${label('Alerts + Cases')}${generateAlertsAndCases ? value('generated') : chalk.dim('skipped')}`,
+  );
+  logger.print(
+    `  ${label('Events')}${generateEvents ? value('generated') : chalk.dim('skipped')}`,
+  );
+  logger.print(
+    `  ${label('Extended data')}${generateExtended ? value('generated') : chalk.dim('skipped')}`,
   );
   logger.print(`  ${label('docs-generator')}${value(docsGeneratorDir)}`);
   logger.print('');
@@ -205,46 +217,58 @@ export async function runLocalFlow(answers: LocalWizardAnswers): Promise<void> {
 
   // ── Step 8/11: Kibana internal generator ──────────────────────────────────
   logger.step(8, TOTAL_STEPS, 'Running Kibana internal data generator…');
-  const preset = VOLUME_PRESETS[answers.volume];
-  try {
-    await runKibanaLocalGenerator(answers.kibanaDir, answers.kibanaUrl, credentials, {
-      spaceId: answers.space,
-      events: preset.events,
-      hosts: preset.hosts,
-      users: preset.users,
-    });
-  } catch (err) {
-    logger.warn(
-      `Kibana internal generator failed (continuing): ${getErrorMessage(err)}`,
-    );
+  if (answers.generateAlertsAndCases) {
+    const preset = VOLUME_PRESETS[answers.volume];
+    try {
+      await runKibanaLocalGenerator(answers.kibanaDir, answers.kibanaUrl, credentials, {
+        spaceId: answers.space,
+        events: preset.events,
+        hosts: preset.hosts,
+        users: preset.users,
+      });
+    } catch (err) {
+      logger.warn(
+        `Kibana internal generator failed (continuing): ${getErrorMessage(err)}`,
+      );
+    }
+  } else {
+    logger.info('Alerts + Cases generation skipped (not selected).');
   }
 
   // ── Step 9/11: Endpoint event generator (resolver trees) ─────────────────
   // Note: yarn test:generate does NOT support --spaceId; always writes to
   // the default space regardless of the configured space.
   logger.step(9, TOTAL_STEPS, 'Running Kibana endpoint event generator (resolver trees)…');
-  try {
-    await runGenerateEvents(answers.kibanaDir, answers.kibanaUrl, credentials);
-  } catch (err) {
-    logger.warn(
-      `Endpoint event generator failed (continuing): ${getErrorMessage(err)}`,
-    );
+  if (answers.generateEvents) {
+    try {
+      await runGenerateEvents(answers.kibanaDir, answers.kibanaUrl, credentials);
+    } catch (err) {
+      logger.warn(
+        `Endpoint event generator failed (continuing): ${getErrorMessage(err)}`,
+      );
+    }
+  } else {
+    logger.info('Events generation skipped (not selected).');
   }
 
   // ── Step 10/11: docs-generator ────────────────────────────────────────────
   logger.step(10, TOTAL_STEPS, 'Setting up security-documents-generator…');
-  await ensureRepoCloned(answers.docsGeneratorDir);
-  await writeConfig(answers.docsGeneratorDir, {
-    elasticsearchUrl: answers.elasticsearchUrl,
-    kibanaUrl: answers.kibanaUrl,
-    mode: answers.target === 'local-serverless' ? 'serverless' : 'stateful',
-    credentials,
-  });
-  await installDependencies(answers.docsGeneratorDir);
-  await runStandardSequence(answers.docsGeneratorDir, {
-    space: answers.space,
-    volume: answers.volume,
-  });
+  if (answers.generateExtended) {
+    await ensureRepoCloned(answers.docsGeneratorDir);
+    await writeConfig(answers.docsGeneratorDir, {
+      elasticsearchUrl: answers.elasticsearchUrl,
+      kibanaUrl: answers.kibanaUrl,
+      mode: answers.target === 'local-serverless' ? 'serverless' : 'stateful',
+      credentials,
+    });
+    await installDependencies(answers.docsGeneratorDir);
+    await runStandardSequence(answers.docsGeneratorDir, {
+      space: answers.space,
+      volume: answers.volume,
+    });
+  } else {
+    logger.info('Extended data (docs-generator) skipped (not selected).');
+  }
 
   // ── Step 11/11: Summary ───────────────────────────────────────────────────
   logger.step(11, TOTAL_STEPS, 'Done!');
