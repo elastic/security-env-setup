@@ -59,7 +59,8 @@ async function runLocalPrompts(
     'security-documents-generator',
   );
 
-  const answers = await inquirer.prompt<{
+  // ── Batch 1: connection + volume settings ──────────────────────────────────
+  const batchAnswers = await inquirer.prompt<{
     kibanaDir: string;
     kibanaUrl: string;
     elasticsearchUrl: string;
@@ -67,8 +68,6 @@ async function runLocalPrompts(
     password: string;
     space: string;
     volume: Volume;
-    docsGeneratorDir: string;
-    installSampleData: boolean;
   }>([
     {
       type: 'input',
@@ -162,23 +161,56 @@ async function runLocalPrompts(
         { name: 'heavy — ~50k alerts, 25 hosts, 25 users', value: 'heavy' },
       ],
     },
+  ]);
+
+  // ── Data-generation checkbox ────────────────────────────────────────────────
+  const { dataChoices } = await inquirer.prompt<{ dataChoices: string[] }>([
     {
-      type: 'input',
-      name: 'docsGeneratorDir',
-      message: 'Path for security-documents-generator:',
-      default: defaultDocsDir,
-      validate: (input: string): boolean | string => {
-        const t = input.trim();
-        if (!path.isAbsolute(t)) return 'Path must be absolute.';
-        if (UNSAFE_PATH_RE.test(t))
-          return (
-            "Path must not contain shell-unsafe characters " +
-            "(space, ', \", $, `, ;, &, |, <, >)."
-          );
-        return true;
-      },
-      filter: (input: string): string => input.trim(),
+      type: 'checkbox',
+      name: 'dataChoices',
+      message:
+        'Generate sample data (select any, note: Alerts and Cases are generated together in local):',
+      choices: [
+        { name: 'Alerts + Attack Discoveries', value: 'alerts' },
+        { name: 'Cases', value: 'cases' },
+        { name: 'Events', value: 'events' },
+        { name: 'Extended data — entity analytics, CSP, integrations', value: 'extended' },
+      ],
     },
+  ]);
+
+  const generateAlertsAndCases =
+    dataChoices.includes('alerts') || dataChoices.includes('cases');
+  const generateEvents = dataChoices.includes('events');
+  const generateExtended = dataChoices.includes('extended');
+
+  // ── docs-generator path (only when extended is selected) ───────────────────
+  let docsGeneratorDir = '';
+  if (generateExtended) {
+    const docsAnswer = await inquirer.prompt<{ docsGeneratorDir: string }>([
+      {
+        type: 'input',
+        name: 'docsGeneratorDir',
+        message: 'Path for security-documents-generator:',
+        default: defaultDocsDir,
+        validate: (input: string): boolean | string => {
+          const t = input.trim();
+          if (!path.isAbsolute(t)) return 'Path must be absolute.';
+          if (UNSAFE_PATH_RE.test(t))
+            return (
+              "Path must not contain shell-unsafe characters " +
+              "(space, ', \", $, `, ;, &, |, <, >)."
+            );
+          return true;
+        },
+        filter: (input: string): string => input.trim(),
+      },
+    ]);
+    docsGeneratorDir = docsAnswer.docsGeneratorDir;
+  }
+
+  // ── Sample data (last prompt, unchanged) ───────────────────────────────────
+  const { installSampleData } = await inquirer.prompt<{ installSampleData: boolean }>([
     {
       type: 'confirm',
       name: 'installSampleData',
@@ -187,7 +219,15 @@ async function runLocalPrompts(
     },
   ]);
 
-  return { target, ...answers };
+  return {
+    target,
+    ...batchAnswers,
+    generateAlertsAndCases,
+    generateEvents,
+    generateExtended,
+    docsGeneratorDir,
+    installSampleData,
+  };
 }
 
 // ---------------------------------------------------------------------------

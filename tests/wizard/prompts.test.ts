@@ -72,12 +72,35 @@ function setupPrompts(overrides: {
   }
 }
 
-/** Mock the two prompts needed for a local-target wizard run. */
+/**
+ * Mock all prompt calls needed for a local-target wizard run.
+ *
+ * Prompt call structure after Stage 4.15:
+ *   Call 0: target selector
+ *   Call 1: main batch (kibanaDir … volume, 7 questions)
+ *   Call 2: dataChoices checkbox
+ *   Call 3: docsGeneratorDir input (only when dataChoices includes 'extended')
+ *   Call 4 (or 3 when no extended): installSampleData confirm
+ */
 function setupLocalPrompts(
   target: 'local-stateful' | 'local-serverless',
   overrides: Record<string, unknown> = {},
 ): void {
+  // Pull out fields that go into separate calls; the rest go into the batch.
+  const {
+    dataChoices: dataChoicesOverride,
+    docsGeneratorDir: docsGenDirOverride,
+    installSampleData: installSampleDataOverride,
+    ...batchOverrides
+  } = overrides;
+
+  const dataChoices = (dataChoicesOverride as string[] | undefined) ?? [];
+  const generateExtended = dataChoices.includes('extended');
+
+  // Call 0: target
   mockedInquirer.prompt.mockResolvedValueOnce({ target });
+
+  // Call 1: main batch (kibanaDir … volume)
   mockedInquirer.prompt.mockResolvedValueOnce({
     kibanaDir: '/home/user/kibana',
     kibanaUrl: 'http://localhost:5601',
@@ -86,9 +109,24 @@ function setupLocalPrompts(
     password: 'changeme',
     space: 'default',
     volume: 'medium',
-    docsGeneratorDir: '/home/user/security-documents-generator',
-    installSampleData: false,
-    ...overrides,
+    ...batchOverrides,
+  });
+
+  // Call 2: dataChoices
+  mockedInquirer.prompt.mockResolvedValueOnce({ dataChoices });
+
+  // Call 3: docsGeneratorDir (only when extended selected)
+  if (generateExtended) {
+    mockedInquirer.prompt.mockResolvedValueOnce({
+      docsGeneratorDir:
+        (docsGenDirOverride as string | undefined) ??
+        '/home/user/security-documents-generator',
+    });
+  }
+
+  // Last call: installSampleData
+  mockedInquirer.prompt.mockResolvedValueOnce({
+    installSampleData: (installSampleDataOverride as boolean | undefined) ?? false,
   });
 }
 
@@ -407,13 +445,13 @@ describe('runWizard — ECH target', () => {
 describe('local prompt validators and filter functions', () => {
   let localPromptCalls: Array<Array<Record<string, unknown>>>;
 
-  // Run the wizard once with a local-stateful target so ALL local prompt
-  // calls fire, giving us access to every question's validate/filter.
+  // Run the wizard with extended selected so ALL local prompt calls fire,
+  // giving us access to every question's validate/filter including docsGeneratorDir.
   beforeAll(async () => {
     jest.clearAllMocks();
     mockedFs.existsSync.mockReturnValue(true);
     (mockedFs.statSync as jest.Mock).mockReturnValue({ isDirectory: () => true });
-    setupLocalPrompts('local-stateful');
+    setupLocalPrompts('local-stateful', { dataChoices: ['extended'] });
     await runWizard();
     localPromptCalls = mockedInquirer.prompt.mock.calls.map(
       (call) => call[0] as Array<Record<string, unknown>>,
@@ -421,8 +459,17 @@ describe('local prompt validators and filter functions', () => {
   });
 
   function getLocalQ(questionIndex: number) {
-    // Call 0 = target selector, call 1 = all 9 local questions
+    // Call 0 = target selector, call 1 = 7 batch questions (kibanaDir…volume)
     return localPromptCalls[1]?.[questionIndex] as {
+      validate?: (v: string) => boolean | string;
+      filter?: (v: string) => string;
+      default?: unknown;
+    };
+  }
+
+  function getDocsGenQ() {
+    // Call 3 = docsGeneratorDir (only present when extended is selected)
+    return localPromptCalls[3]?.[0] as {
       validate?: (v: string) => boolean | string;
       filter?: (v: string) => string;
       default?: unknown;
@@ -560,35 +607,35 @@ describe('local prompt validators and filter functions', () => {
     expect(validate?.('my-space_1')).toBe(true);
   });
 
-  // ── index 7: docsGeneratorDir ────────────────────────────────────────────
+  // ── docsGeneratorDir (call 3 when extended selected) ──────────────────────
 
   it('docsGeneratorDir validate — rejects relative path', () => {
-    const { validate } = getLocalQ(7);
+    const { validate } = getDocsGenQ();
     expect(validate?.('relative/path')).toContain('absolute');
   });
 
   it('docsGeneratorDir validate — rejects path with space', () => {
-    const { validate } = getLocalQ(7);
+    const { validate } = getDocsGenQ();
     expect(validate?.('/home/user/my docs')).toContain('unsafe');
   });
 
   it("docsGeneratorDir validate — rejects path with single quote", () => {
-    const { validate } = getLocalQ(7);
+    const { validate } = getDocsGenQ();
     expect(validate?.("/home/user/user's-dir")).toContain('unsafe');
   });
 
   it('docsGeneratorDir validate — rejects path with dollar sign', () => {
-    const { validate } = getLocalQ(7);
+    const { validate } = getDocsGenQ();
     expect(validate?.('/home/user/$HOME')).toContain('unsafe');
   });
 
   it('docsGeneratorDir validate — accepts valid absolute path', () => {
-    const { validate } = getLocalQ(7);
+    const { validate } = getDocsGenQ();
     expect(validate?.('/home/user/security-docs')).toBe(true);
   });
 
   it('docsGeneratorDir filter — trims whitespace', () => {
-    const { filter } = getLocalQ(7);
+    const { filter } = getDocsGenQ();
     expect(filter?.('  /home/user/docs  ')).toBe('/home/user/docs');
   });
 });
@@ -598,11 +645,18 @@ describe('local prompt validators and filter functions', () => {
 // ---------------------------------------------------------------------------
 
 describe('local prompt defaults', () => {
-  function getLocalQuestion(
+  /** Access a question in the main batch (call 1, indices 0–6). */
+  function getBatchQ(
     calls: Array<Array<Record<string, unknown>>>,
     questionIndex: number,
   ) {
     return calls[1]?.[questionIndex] as { default?: unknown };
+  }
+
+  /** installSampleData is the last call (call 3 when no extended, question 0). */
+  function getInstallSampleDataQ(calls: Array<Array<Record<string, unknown>>>) {
+    // Without extended, prompt calls are: target(0), batch(1), dataChoices(2), installSampleData(3)
+    return calls[3]?.[0] as { default?: unknown };
   }
 
   it('username default is "elastic" for local-stateful', async () => {
@@ -611,7 +665,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 3).default).toBe('elastic');
+    expect(getBatchQ(calls, 3).default).toBe('elastic');
   });
 
   it('username default is "elastic_serverless" for local-serverless', async () => {
@@ -620,7 +674,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 3).default).toBe('elastic_serverless');
+    expect(getBatchQ(calls, 3).default).toBe('elastic_serverless');
   });
 
   it('volume default is "medium"', async () => {
@@ -629,7 +683,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 6).default).toBe('medium');
+    expect(getBatchQ(calls, 6).default).toBe('medium');
   });
 
   it('sample data default is false', async () => {
@@ -638,7 +692,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 8).default).toBe(false);
+    expect(getInstallSampleDataQ(calls).default).toBe(false);
   });
 
   it('kibanaUrl default is http://localhost:5601', async () => {
@@ -647,7 +701,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 1).default).toBe('http://localhost:5601');
+    expect(getBatchQ(calls, 1).default).toBe('http://localhost:5601');
   });
 
   it('elasticsearchUrl default is http://localhost:9200', async () => {
@@ -656,7 +710,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 2).default).toBe('http://localhost:9200');
+    expect(getBatchQ(calls, 2).default).toBe('http://localhost:9200');
   });
 
   it('space default is "default"', async () => {
@@ -665,7 +719,7 @@ describe('local prompt defaults', () => {
     const calls = mockedInquirer.prompt.mock.calls.map(
       (c) => c[0] as Array<Record<string, unknown>>,
     );
-    expect(getLocalQuestion(calls, 5).default).toBe('default');
+    expect(getBatchQ(calls, 5).default).toBe('default');
   });
 });
 
@@ -697,10 +751,16 @@ describe('runWizard — local targets', () => {
     expect(result.username).toBe('elastic_serverless');
   });
 
-  it('fires exactly 2 prompt calls for local targets (target + local prompts)', async () => {
-    setupLocalPrompts('local-stateful');
+  it('fires exactly 4 prompt calls for local targets without extended (target + batch + dataChoices + installSampleData)', async () => {
+    setupLocalPrompts('local-stateful'); // dataChoices defaults to []
     await runWizard();
-    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(2);
+    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(4);
+  });
+
+  it('fires exactly 5 prompt calls when extended is selected (adds docsGeneratorDir call)', async () => {
+    setupLocalPrompts('local-stateful', { dataChoices: ['extended'] });
+    await runWizard();
+    expect(mockedInquirer.prompt).toHaveBeenCalledTimes(5);
   });
 
   it('passes through all local answer fields to the returned object', async () => {
@@ -711,5 +771,87 @@ describe('runWizard — local targets', () => {
     }
     expect(result.space).toBe('my-space');
     expect(result.volume).toBe('heavy');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runLocalPrompts — dataChoices checkbox (Stage 4.15)
+// ---------------------------------------------------------------------------
+
+describe('runLocalPrompts — dataChoices checkbox', () => {
+  /** Helper: run the wizard and narrow to a local result. */
+  async function runLocal() {
+    const result = await runWizard();
+    if (result.target !== 'local-stateful' && result.target !== 'local-serverless') {
+      throw new Error('Expected local result');
+    }
+    return result;
+  }
+
+  /** Collect all prompt names across every mock call. */
+  function allPromptNames(): string[] {
+    return (mockedInquirer.prompt as jest.MockedFunction<typeof inquirer.prompt>).mock.calls
+      .flatMap((call) => (call[0] as Array<{ name: string }>).map((p) => p.name));
+  }
+
+  it('all four choices selected → all three flags true and docsGeneratorDir prompt called', async () => {
+    setupLocalPrompts('local-stateful', {
+      dataChoices: ['alerts', 'cases', 'events', 'extended'],
+    });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(true);
+    expect(result.generateEvents).toBe(true);
+    expect(result.generateExtended).toBe(true);
+    expect(result.docsGeneratorDir).toBe('/home/user/security-documents-generator');
+    expect(allPromptNames()).toContain('docsGeneratorDir');
+  });
+
+  it('only events selected → generateAlertsAndCases false, generateEvents true, generateExtended false, docsGeneratorDir empty', async () => {
+    setupLocalPrompts('local-stateful', { dataChoices: ['events'] });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(false);
+    expect(result.generateEvents).toBe(true);
+    expect(result.generateExtended).toBe(false);
+    expect(result.docsGeneratorDir).toBe('');
+    expect(allPromptNames()).not.toContain('docsGeneratorDir');
+  });
+
+  it('only extended selected → flags are false/false/true and docsGeneratorDir prompt called', async () => {
+    setupLocalPrompts('local-stateful', {
+      dataChoices: ['extended'],
+      docsGeneratorDir: '/custom/docs-gen',
+    });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(false);
+    expect(result.generateEvents).toBe(false);
+    expect(result.generateExtended).toBe(true);
+    expect(result.docsGeneratorDir).toBe('/custom/docs-gen');
+    expect(allPromptNames()).toContain('docsGeneratorDir');
+  });
+
+  it('only alerts selected → generateAlertsAndCases true (OR logic with cases)', async () => {
+    setupLocalPrompts('local-stateful', { dataChoices: ['alerts'] });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(true);
+    expect(result.generateEvents).toBe(false);
+    expect(result.generateExtended).toBe(false);
+  });
+
+  it('only cases selected → generateAlertsAndCases true (OR logic with alerts)', async () => {
+    setupLocalPrompts('local-stateful', { dataChoices: ['cases'] });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(true);
+    expect(result.generateEvents).toBe(false);
+    expect(result.generateExtended).toBe(false);
+  });
+
+  it('nothing selected → all three flags false, docsGeneratorDir empty, prompt not called', async () => {
+    setupLocalPrompts('local-stateful', { dataChoices: [] });
+    const result = await runLocal();
+    expect(result.generateAlertsAndCases).toBe(false);
+    expect(result.generateEvents).toBe(false);
+    expect(result.generateExtended).toBe(false);
+    expect(result.docsGeneratorDir).toBe('');
+    expect(allPromptNames()).not.toContain('docsGeneratorDir');
   });
 });
