@@ -163,36 +163,61 @@ _`[1/5]` is the overall wizard; once a local target is chosen, the flow delegate
 </details>
 
 <details>
-<summary><b>Elastic Cloud — full data generation</b> <i>(output snapshot to be refreshed after the next live run)</i></summary>
+<summary><b>Elastic Cloud — full data generation</b></summary>
 
 ```
 [1/5] Running deployment wizard…
-[2/5] Creating deployment "sec-final-demo" on prod…
+? What kind of environment do you want to create? Elastic Cloud (ECH)
+? Deployment name: security-readme-demo
+? Target environment: prod
+? Region: gcp-us-west2
+? Stack version: 9.4.0
+? How many Kibana spaces do you want to create? (1–10): 2
+? Space 1 name: Security
+? Space 2 name: staging
+? Generate sample data (select any): Alerts + Attack Discoveries, Cases, Events
+? Path to local kibana repository (leave empty to skip data generation): /Users/you/Kibana/kibana
+? Also generate data in additional spaces? (select any) Security
+
+[2/5] Creating deployment "security-readme-demo" on prod…
+Deployment "security-readme-demo" created (id: <deployment-id>).
+
 [3/5] Waiting for deployment to become healthy…
 ✔ Deployment is healthy and running.
+Kibana:        https://<kibana-id>.us-west2.gcp.elastic-cloud.com:443
+Elasticsearch: https://<es-id>.us-west2.gcp.elastic-cloud.com:443
+
 [4/5] Creating Kibana spaces…
 ✔ Space "Security" created successfully.
-✔ Space "Staging" created successfully.
+✔ Space "staging" created successfully.
+
 [5/5] Initializing Security Solution…
 ✔ Security Solution index initialized successfully.
-Kibana dependencies not found. Running yarn kbn bootstrap…
-Done in 14.36s.
+Kibana dependencies ready.
+Passing Elasticsearch password via --password to generate_cli.js; this may be visible in process listings while the script runs.
 ✔ Generating alerts & attack discoveries — done
-✔ Generating events — done
+Passing Elasticsearch/Kibana credentials embedded in URLs for yarn test:generate; they may be visible in process listings while the script runs.
+ info Build flavor: non-serverless
+ info Indexing host and alerts...
+ info Creating and indexing documents took: 73727ms
+Generating events — done
+Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.
 ✔ Generating cases — done
+Passing Elasticsearch password via --password to generate_cli.js; this may be visible in process listings while the script runs.
 ✔ Generating alerts & attack discoveries — done (space: security)
+Passing Elasticsearch password via --password to generate_cases.js; this may be visible in process listings while the script runs.
 ✔ Generating cases — done (space: security)
 
 ────────────────────────────────────────────────────────────
   Deployment Ready
 ────────────────────────────────────────────────────────────
-  Name          sec-final-demo
+  Name          security-readme-demo
   Environment   prod
-  Kibana        https://a86ee5dac90347098786348e1a394a31.us-west2.gcp.elastic-cloud.com:443
-  Elasticsearch https://c1eed76c8e424c378e3117f8b977de78.us-west2.gcp.elastic-cloud.com:443
+  Kibana        https://<kibana-id>.us-west2.gcp.elastic-cloud.com:443
+  Elasticsearch https://<es-id>.us-west2.gcp.elastic-cloud.com:443
   Username      elastic
   Password      ••••••••••••••••••••
-  Spaces        Security, Staging
+  Spaces        Security, staging
   Data spaces   default, security
 ────────────────────────────────────────────────────────────
   Keep your password safe — it will not be shown again.
