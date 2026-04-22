@@ -58,7 +58,7 @@ node dist/index.js clean
 ## Prerequisites
 
 - **Node.js** on `PATH` (for the CLI itself). Node 18+ is what has been tested; older versions may work but are unverified.
-- **Node.js 24+ via nvm** — required for local target runs because the local flow performs the `security-documents-generator` preflight. The CLI detects this automatically and offers to run `nvm install 24` for you.
+- **Node.js 24+ via nvm** — required for any local-target run. The CLI performs the preflight at the start of `runLocalFlow` and offers to run `nvm install 24` if the right version is not available.
 - **Elastic Cloud target:** an Elastic Cloud account with an API key that has deployment create/read/delete permissions. Configure it via `auth login`.
 - **Local target:** a local clone of [`elastic/kibana`](https://github.com/elastic/kibana), already bootstrapped (`yarn kbn bootstrap` completed), and Node.js 24+ available via `nvm`. The CLI will verify this at startup and abort with a clear message if bootstrap is missing.
 
@@ -78,7 +78,7 @@ Both targets follow the same core flow (spaces, detection engine init, prebuilt 
 
 ### Data-generation choices
 
-A `checkbox` prompt lets the user pick which sample data to generate. The three shared options are identical in both targets; local adds a fourth option for extended data.
+Both targets surface a `checkbox` prompt with the same three core options (Alerts+Attack Discoveries, Cases, Events). The prompts are defined separately per target in `src/wizard/prompts.ts` — ECH inside `runWizard`, local inside `runLocalPrompts` — but the user-visible choices are identical. The local prompt adds a fourth option for extended data; ECH does not.
 
 - **Alerts + Attack Discoveries** — runs `generate_cli.js --attacks`; creates rules and their matching alerts.
 - **Cases** — in ECH, runs `generate_cases.js` for ~1000 cases in default + 300 per additional space. In local, cases are generated together with alerts by the same script (the wizard tells the user this up front).
@@ -234,7 +234,7 @@ node dist/index.js auth status   # shows which environments have a configured ke
 node dist/index.js auth logout   # removes the stored key for an environment
 ```
 
-Keys are stored at `~/.security-env-setup/config.json` (via [`conf`](https://www.npmjs.com/package/conf)).
+Keys are stored at `~/.security-env-setup/config.json` using plain `fs` primitives (restrictive file permissions applied when possible). The `conf` npm package was originally planned for this, but v12+ is ESM-only and incompatible with the project's CommonJS output, so the store is implemented directly.
 </details>
 
 <details>
@@ -248,11 +248,17 @@ Interactive wizard. The exact prompts depend on the chosen target.
 - `--dry-run` — meaningful only with `--clean`; previews what clean would delete and exits without provisioning.
 - `--yes` — skip clean's final confirmation prompt (useful in CI).
 
+**Target-specific semantics** (important):
+
+- **Local stateful:** all three flags work as documented.
+- **Elastic Cloud (ECH):** `--clean` / `--dry-run` / `--yes` are ignored with a warning. ECH provisioning always creates a fresh deployment, so there's nothing to pre-clean in the same sense.
+- **Local serverless:** `--clean` is skipped with a warning (serverless is not empirically validated; see "Known limitations").
+
 ```bash
-node dist/index.js create
-node dist/index.js create --clean           # wipe, then reprovision
-node dist/index.js create --clean --dry-run # preview clean, don't provision
-node dist/index.js create --clean --yes     # automated iteration
+node dist/index.js create                   # interactive wizard
+node dist/index.js create --clean           # local-stateful: wipe, then reprovision
+node dist/index.js create --clean --dry-run # local-stateful: preview clean, don't provision
+node dist/index.js create --clean --yes     # local-stateful: automated iteration
 ```
 </details>
 
