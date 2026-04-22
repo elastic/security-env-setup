@@ -58,9 +58,9 @@ node dist/index.js clean
 ## Prerequisites
 
 - **Node.js** on `PATH` (for the CLI itself). Node 18+ is what has been tested; older versions may work but are unverified.
-- **Node.js 24+ via nvm** — required by `security-documents-generator` when using the local target's "Extended data" option. The CLI detects this automatically and offers to run `nvm install 24` for you.
+- **Node.js 24+ via nvm** — required for local target runs because the local flow performs the `security-documents-generator` preflight. The CLI detects this automatically and offers to run `nvm install 24` for you.
 - **Elastic Cloud target:** an Elastic Cloud account with an API key that has deployment create/read/delete permissions. Configure it via `auth login`.
-- **Local target:** a local clone of [`elastic/kibana`](https://github.com/elastic/kibana), already bootstrapped (`yarn kbn bootstrap` completed). The CLI will verify this at startup and abort with a clear message if bootstrap is missing.
+- **Local target:** a local clone of [`elastic/kibana`](https://github.com/elastic/kibana), already bootstrapped (`yarn kbn bootstrap` completed), and Node.js 24+ available via `nvm`. The CLI will verify this at startup and abort with a clear message if bootstrap is missing.
 
 ---
 
